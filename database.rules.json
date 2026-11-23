@@ -1,0 +1,30 @@
+{
+  "rules": {
+    "anime": {
+      ".read": true,
+      "$animeId": {
+        ".write": "auth != null && auth.token.email === 'xyronbhaiii@gmail.com' && auth.token.email_verified === true",
+        ".validate": "newData.val() === null || (newData.hasChildren(['id', 'title', 'synopsis', 'posterImage', 'isPublished']) && newData.child('title').isString() && newData.child('title').val().length > 0 && newData.child('title').val().length <= 200)"
+      }
+    },
+    "episodes": {
+      ".read": true,
+      "$episodeId": {
+        ".write": "auth != null && auth.token.email === 'xyronbhaiii@gmail.com' && auth.token.email_verified === true",
+        ".validate": "newData.val() === null || (newData.hasChildren(['id', 'animeId', 'number', 'title', 'videoUrl']) && newData.child('videoUrl').isString() && newData.child('videoUrl').val().length > 0)"
+      }
+    },
+    "deletedAnimeIds": {
+      ".read": true,
+      "$animeId": {
+        ".write": "auth != null && auth.token.email === 'xyronbhaiii@gmail.com' && auth.token.email_verified === true"
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}

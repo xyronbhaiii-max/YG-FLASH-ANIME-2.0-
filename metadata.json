@@ -1,0 +1,6 @@
+{
+  "name": "YG Flash Anime",
+  "description": "Professional anime streaming platform with admin catalog management, AniList metadata lookup, multi-theme engine, and premium 16:9 video player.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

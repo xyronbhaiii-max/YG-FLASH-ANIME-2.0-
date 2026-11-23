@@ -1,0 +1,410 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root,
+[data-theme="emerald"],
+[data-theme="crimson"] {
+  --bg-main: #070b0d;
+  --bg-surface: #0e1518;
+  --bg-card: #131c20;
+  --bg-glass: rgba(11, 17, 20, 0.88);
+  --border-subtle: #1f2e33;
+  --border-focus: #10b981;
+  --primary: #10b981;
+  --primary-hover: #059669;
+  --primary-secondary: #14b8a6;
+  --highlight-cyan: #22d3ee;
+  --primary-rgb: 16, 185, 129;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --accent-glow: 0 4px 18px rgba(16, 185, 129, 0.22);
+  --badge-bg: rgba(20, 184, 166, 0.14);
+  --badge-text: #5eead4;
+  --nav-active: #10b981;
+}
+
+[data-theme="graphite"] {
+  --bg-main: #0c0d10;
+  --bg-surface: #14161a;
+  --bg-card: #1c1f26;
+  --bg-glass: rgba(20, 22, 26, 0.85);
+  --border-subtle: #332d28;
+  --border-focus: #f97316;
+  --primary: #f97316;
+  --primary-hover: #ea580c;
+  --primary-rgb: 249, 115, 22;
+  --text-main: #ffffff;
+  --text-muted: #9ba0aa;
+  --accent-glow: 0 0 24px rgba(249, 115, 22, 0.35);
+  --badge-bg: rgba(249, 115, 22, 0.15);
+  --badge-text: #fdba74;
+  --nav-active: #f97316;
+}
+
+[data-theme="astral"] {
+  --bg-main: #060913;
+  --bg-surface: #0e1329;
+  --bg-card: #151d3b;
+  --bg-glass: rgba(14, 19, 41, 0.85);
+  --border-subtle: #242b54;
+  --border-focus: #a855f7;
+  --primary: #a855f7;
+  --primary-hover: #9333ea;
+  --primary-rgb: 168, 85, 247;
+  --text-main: #ffffff;
+  --text-muted: #98a1c0;
+  --accent-glow: 0 0 24px rgba(168, 85, 247, 0.35);
+  --badge-bg: rgba(168, 85, 247, 0.18);
+  --badge-text: #d8b4fe;
+  --nav-active: #a855f7;
+}
+
+[data-theme="ios"] {
+  --bg-main: #000000;
+  --bg-surface: #1c1c1e;
+  --bg-card: rgba(28, 28, 30, 0.88);
+  --bg-glass: rgba(22, 22, 24, 0.78);
+  --border-subtle: rgba(255, 255, 255, 0.14);
+  --border-focus: #0a84ff;
+  --primary: #0a84ff;
+  --primary-hover: #409cff;
+  --primary-rgb: 10, 132, 255;
+  --text-main: #ffffff;
+  --text-muted: #8e8e93;
+  --accent-glow: 0 0 26px rgba(10, 132, 255, 0.45);
+  --badge-bg: rgba(10, 132, 255, 0.18);
+  --badge-text: #64d2ff;
+  --nav-active: #0a84ff;
+}
+
+/* ==================== PERSISTENT LIGHT MODE PALETTES ==================== */
+html[data-mode="light"],
+html[data-mode="light"][data-theme="emerald"],
+html[data-mode="light"][data-theme="crimson"] {
+  --bg-main: #f3f7f6;
+  --bg-surface: #e6eeec;
+  --bg-card: #ffffff;
+  --bg-glass: rgba(248, 251, 250, 0.9);
+  --border-subtle: #cfdcd9;
+  --border-focus: #059669;
+  --primary: #059669;
+  --primary-hover: #047857;
+  --primary-secondary: #0d9488;
+  --highlight-cyan: #0891b2;
+  --primary-rgb: 5, 150, 105;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --accent-glow: 0 4px 16px rgba(5, 150, 105, 0.18);
+  --badge-bg: rgba(13, 148, 136, 0.11);
+  --badge-text: #0f766e;
+  --nav-active: #059669;
+}
+
+html[data-mode="light"][data-theme="graphite"] {
+  --bg-main: #f7f5f2;
+  --bg-surface: #ece8e2;
+  --bg-card: #ffffff;
+  --bg-glass: rgba(255, 253, 250, 0.88);
+  --border-subtle: #ded7ce;
+  --border-focus: #ea580c;
+  --primary: #ea580c;
+  --primary-hover: #c2410c;
+  --primary-rgb: 234, 88, 12;
+  --text-main: #18181b;
+  --text-muted: #52525b;
+  --accent-glow: 0 4px 20px rgba(234, 88, 12, 0.25);
+  --badge-bg: rgba(234, 88, 12, 0.12);
+  --badge-text: #c2410c;
+  --nav-active: #ea580c;
+}
+
+html[data-mode="light"][data-theme="astral"] {
+  --bg-main: #f4f3ff;
+  --bg-surface: #e8e6fa;
+  --bg-card: #ffffff;
+  --bg-glass: rgba(249, 248, 255, 0.88);
+  --border-subtle: #d6d2f0;
+  --border-focus: #9333ea;
+  --primary: #9333ea;
+  --primary-hover: #7e22ce;
+  --primary-rgb: 147, 51, 234;
+  --text-main: #1e1b4b;
+  --text-muted: #4c4678;
+  --accent-glow: 0 4px 20px rgba(147, 51, 234, 0.25);
+  --badge-bg: rgba(147, 51, 234, 0.12);
+  --badge-text: #7e22ce;
+  --nav-active: #9333ea;
+}
+
+html[data-mode="light"][data-theme="ios"] {
+  --bg-main: #f2f2f7;
+  --bg-surface: #e5e5ea;
+  --bg-card: rgba(255, 255, 255, 0.94);
+  --bg-glass: rgba(249, 249, 252, 0.86);
+  --border-subtle: rgba(15, 23, 42, 0.12);
+  --border-focus: #007aff;
+  --primary: #007aff;
+  --primary-hover: #005ecb;
+  --primary-rgb: 0, 122, 255;
+  --text-main: #000000;
+  --text-muted: #4b5563;
+  --accent-glow: 0 4px 20px rgba(0, 122, 255, 0.28);
+  --badge-bg: rgba(0, 122, 255, 0.12);
+  --badge-text: #005ecb;
+  --nav-active: #007aff;
+}
+
+html[data-mode="light"] .text-white {
+  color: var(--text-main);
+}
+
+html[data-mode="light"] .text-neutral-200,
+html[data-mode="light"] .text-neutral-300 {
+  color: #334155;
+}
+
+html[data-mode="light"] .text-neutral-400 {
+  color: #475569;
+}
+
+html[data-mode="light"] .theme-btn-primary,
+html[data-mode="light"] .theme-btn-primary .text-white,
+html[data-mode="light"] .yg-dark-surface,
+html[data-mode="light"] .yg-dark-surface .text-white,
+html[data-mode="light"] .yg-player-surface,
+html[data-mode="light"] .yg-player-surface .text-white,
+html[data-mode="light"] .bg-\[var\(--primary\)\] {
+  color: #ffffff !important;
+}
+
+html[data-mode="light"] .yg-dark-surface .text-neutral-300 {
+  color: #e2e8f0;
+}
+
+html[data-mode="light"] .bg-white\/5 {
+  background-color: rgba(15, 23, 42, 0.05);
+}
+
+html[data-mode="light"] .bg-white\/10 {
+  background-color: rgba(15, 23, 42, 0.08);
+}
+
+html[data-mode="light"] .bg-white\/15,
+html[data-mode="light"] .hover\:bg-white\/10:hover,
+html[data-mode="light"] .hover\:bg-white\/15:hover,
+html[data-mode="light"] .hover\:bg-white\/20:hover {
+  background-color: rgba(15, 23, 42, 0.12);
+}
+
+html[data-mode="light"] .border-white\/10,
+html[data-mode="light"] .border-white\/15 {
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+html[data-mode="light"] .shadow-black\/40,
+html[data-mode="light"] .shadow-black\/50 {
+  --tw-shadow-color: rgba(15, 23, 42, 0.08);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  transition: background-color 0.08s ease, color 0.08s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overscroll-behavior-y: contain;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+label,
+[role="button"],
+[tabindex] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.overflow-y-auto,
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+[data-theme="ios"] body,
+html[data-theme="ios"] body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+  letter-spacing: -0.01em;
+}
+
+/* Authentic iPhone Dark Pro Frosted Bars & Grouped Cards */
+html[data-theme="ios"] .glass-panel {
+  background: rgba(20, 20, 22, 0.76);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+html[data-mode="light"][data-theme="ios"] .glass-panel {
+  background: rgba(255, 255, 255, 0.84);
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+html[data-theme="ios"] .theme-card,
+html[data-theme="ios"] .rounded-3xl,
+html[data-theme="ios"] .rounded-2xl {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html[data-theme="ios"] .theme-btn-primary {
+  border-radius: 14px;
+  font-weight: 600;
+  background: linear-gradient(180deg, #1b8eff 0%, #0a84ff 100%);
+  box-shadow: 0 4px 16px rgba(10, 132, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-main);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* Video player range sliders */
+input[type=range] {
+  accent-color: var(--primary);
+}
+
+/* Glassmorphism helpers with solid fallback for older Android 5-8 WebViews */
+.glass-panel {
+  background: rgba(12, 16, 20, 0.94);
+  border: 1px solid var(--border-subtle);
+}
+
+html[data-mode="light"] .glass-panel {
+  background: rgba(248, 251, 250, 0.96);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-panel {
+    background: var(--bg-glass);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+}
+
+.theme-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  transition: border-color 0.14s ease, transform 0.12s ease;
+}
+
+.theme-btn-primary {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(var(--primary-rgb), 0.3);
+  transition: background-color 0.14s ease, transform 0.1s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .theme-card:hover {
+    border-color: rgba(var(--primary-rgb), 0.45);
+  }
+
+  .theme-btn-primary:hover {
+    background: var(--primary-hover);
+    box-shadow: var(--accent-glow);
+  }
+}
+
+.theme-btn-primary:active {
+  transform: scale(0.97);
+}
+
+.theme-border {
+  border-color: var(--border-subtle);
+}
+
+.theme-glow {
+  box-shadow: var(--accent-glow);
+}
+
+.theme-text-primary {
+  color: var(--primary);
+}
+
+/* Compositor-only Logo & Star Blink Animations (zero box-shadow/filter repaints on low-end GPUs) */
+@keyframes logoBeaconBlink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes logoAuraPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.88;
+    transform: scale(0.985);
+  }
+}
+
+.animate-logo-beacon {
+  animation: logoBeaconBlink 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: transform, opacity;
+}
+
+.animate-logo-aura {
+  animation: logoAuraPulse 2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes starBlink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  50% {
+    opacity: 0.32;
+    transform: scale(0.82);
+  }
+}
+
+.animate-star-blink {
+  animation: starBlink 1.25s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-logo-beacon,
+  .animate-logo-aura,
+  .animate-star-blink {
+    animation: none !important;
+  }
+}

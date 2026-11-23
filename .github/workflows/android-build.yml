@@ -1,0 +1,154 @@
+name: YG Flash Anime — Android APK Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "APK build variant to generate"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+          - both
+      api_base_url:
+        description: "Backend HTTPS origin for the Android app"
+        required: false
+        default: "https://ais-pre-d3fcmcsrrwmaklp5aczaab-204390072266.asia-northeast1.run.app"
+        type: string
+
+jobs:
+  build-android-apk:
+    name: Build YG FLASH ANIME Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle Packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: TypeScript Lint Check
+        run: npm run lint
+
+      - name: Build Web Application
+        env:
+          VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL || 'https://ais-pre-d3fcmcsrrwmaklp5aczaab-204390072266.asia-northeast1.run.app' }}
+        run: npm run build
+
+      - name: Restore Optional google-services.json (If Secret Configured)
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+            echo "Restored android/app/google-services.json from GitHub Secret."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 not set; building without native google-services.json."
+          fi
+
+      - name: Sync Capacitor Android Project
+        run: npx cap sync android
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x android/gradlew
+
+      - name: Build Debug APK
+        if: ${{ (inputs.build_type || 'debug') == 'debug' || (inputs.build_type || 'debug') == 'both' }}
+        working-directory: android
+        run: |
+          ./gradlew assembleDebug --stacktrace --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../YG-FLASH-ANIME-debug.apk
+          ls -lh ../YG-FLASH-ANIME-debug.apk
+
+      - name: Build Signed Release APK (If Signing Secrets Configured)
+        if: ${{ (inputs.build_type || 'debug') == 'release' || (inputs.build_type || 'debug') == 'both' }}
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          YG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          YG_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          YG_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$YG_KEYSTORE_PASSWORD" ] || [ -z "$YG_KEY_ALIAS" ] || [ -z "$YG_KEY_PASSWORD" ]; then
+            echo "::warning::Signing secrets (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, YG_KEY_ALIAS, YG_KEY_PASSWORD) are missing. Building unsigned release APK instead."
+            ./gradlew assembleRelease --stacktrace --no-daemon
+            cp app/build/outputs/apk/release/app-release-unsigned.apk ../YG-FLASH-ANIME-release-unsigned.apk
+          else
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/release.keystore
+            export YG_KEYSTORE_PATH="$(pwd)/app/release.keystore"
+            ./gradlew assembleRelease --stacktrace --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../YG-FLASH-ANIME-release-signed.apk
+            rm -f app/release.keystore
+          fi
+
+      - name: Upload Debug APK Artifact
+        if: ${{ always() && hashFiles('YG-FLASH-ANIME-debug.apk') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: YG-FLASH-ANIME-debug-apk
+          path: YG-FLASH-ANIME-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Release APK Artifact
+        if: ${{ always() && hashFiles('YG-FLASH-ANIME-release-*.apk') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: YG-FLASH-ANIME-release-apk
+          path: YG-FLASH-ANIME-release-*.apk
+          retention-days: 30
+
+      - name: Write Build Summary
+        if: always()
+        run: |
+          {
+            echo "## YG FLASH ANIME — Android APK Build"
+            echo ""
+            echo "- **Workflow Trigger**: \`${{ github.event_name }}\`"
+            echo "- **Build Status**: \`${{ job.status }}\`"
+            echo "- **App ID**: \`com.ygflash.anime\`"
+            echo "- **App Name**: \`YG FLASH ANIME\`"
+            if [ -f "YG-FLASH-ANIME-debug.apk" ]; then
+              echo "- **Debug APK Size**: $(du -h YG-FLASH-ANIME-debug.apk | cut -f1)"
+            fi
+            if [ -f "YG-FLASH-ANIME-release-signed.apk" ]; then
+              echo "- **Signed Release APK Size**: $(du -h YG-FLASH-ANIME-release-signed.apk | cut -f1)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,305 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser()
+        && request.auth.token.email == 'xyronbhaiii@gmail.com'
+        && (!('admin' in request.auth.token) || request.auth.token.admin == true);
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidAnime(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'synopsis', 'posterImage', 'rating',
+          'status', 'year', 'episodesCount', 'isPublished', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'title', 'titleJapanese', 'synopsis', 'posterImage', 'bannerImage',
+          'genres', 'rating', 'ratingVerified', 'status', 'year', 'seasons', 'episodesCount',
+          'isPublished', 'featured', 'streamingSources', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && (!('titleJapanese' in data) || (data.titleJapanese is string && data.titleJapanese.size() <= 200))
+        && data.synopsis is string && data.synopsis.size() >= 1 && data.synopsis.size() <= 5000
+        && data.posterImage is string && data.posterImage.size() <= 500000
+        && (!('bannerImage' in data) || (data.bannerImage is string && data.bannerImage.size() <= 500000))
+        && (!('genres' in data) || (data.genres is list && data.genres.size() <= 20 && (data.genres.size() == 0 || data.genres[0] is string)))
+        && data.rating is string && data.rating.size() >= 1 && data.rating.size() <= 32
+        && (!('ratingVerified' in data) || data.ratingVerified is bool)
+        && data.status in ['Ongoing', 'Completed']
+        && data.year is int && data.year >= 1950 && data.year <= 2100
+        && (!('seasons' in data) || (data.seasons is int && data.seasons >= 1 && data.seasons <= 200))
+        && data.episodesCount is int && data.episodesCount >= 0 && data.episodesCount <= 10000
+        && data.isPublished is bool
+        && (!('featured' in data) || data.featured is bool)
+        && (!('streamingSources' in data) || (data.streamingSources is list && data.streamingSources.size() <= 15 && (data.streamingSources.size() == 0 || data.streamingSources[0] is map)))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubtitleTrack(track) {
+      return track is map
+        && track.keys().hasAll(['url', 'language', 'label', 'format', 'source'])
+        && track.keys().hasOnly(['url', 'language', 'label', 'format', 'source', 'generatedBy', 'updatedAt'])
+        && track.url is string && track.url.size() >= 1 && track.url.size() <= 2048
+        && track.language in ['Hindi', 'English']
+        && track.label is string && track.label.size() >= 1 && track.label.size() <= 64
+        && track.format == 'vtt'
+        && track.source in ['uploaded', 'auto-generated', 'url', 'hls']
+        && (!('generatedBy' in track) || (track.generatedBy is string && track.generatedBy.size() <= 100))
+        && (!('updatedAt' in track) || (track.updatedAt is string && track.updatedAt.size() <= 64));
+    }
+
+    function isValidEpisode(data, parentAnimeId) {
+      return data.keys().hasAll([
+          'id', 'animeId', 'number', 'title', 'videoUrl', 'isPublished', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'animeId', 'number', 'season', 'title', 'language', 'synopsis', 'description',
+          'duration', 'videoUrl', 'thumbnailUrl', 'order', 'sources', 'subtitles',
+          'subtitleStatus', 'subtitleError',
+          'aiEnhanced', 'aiEnhancementModel', 'aiEnhancementStatus', 'aiOriginalVideoUrl',
+          'aiSourceWidth', 'aiSourceHeight', 'aiOutputWidth', 'aiOutputHeight',
+          'isPublished', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.animeId)
+        && data.animeId == parentAnimeId
+        && data.number is int && data.number >= 0 && data.number <= 10000
+        && (!('season' in data) || (data.season is int && data.season >= 1 && data.season <= 200))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && (!('language' in data) || (data.language is string && data.language.size() >= 1 && data.language.size() <= 40))
+        && (!('synopsis' in data) || (data.synopsis is string && data.synopsis.size() <= 2000))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 2000))
+        && (!('duration' in data) || (data.duration is string && data.duration.size() <= 32))
+        && data.videoUrl is string && data.videoUrl.size() >= 1 && data.videoUrl.size() <= 2048
+        && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 500000))
+        && (!('order' in data) || (data.order is int && data.order >= 0 && data.order <= 100000))
+        && (!('sources' in data) || (data.sources is list && data.sources.size() <= 15 && (data.sources.size() == 0 || data.sources[0] is map)))
+        && (!('aiEnhanced' in data) || data.aiEnhanced is bool)
+        && (!('aiEnhancementModel' in data) || (data.aiEnhancementModel is string && data.aiEnhancementModel.size() <= 100))
+        && (!('aiEnhancementStatus' in data) || data.aiEnhancementStatus in ['none', 'queued', 'processing', 'completed', 'failed', 'unavailable'])
+        && (!('aiOriginalVideoUrl' in data) || (data.aiOriginalVideoUrl is string && data.aiOriginalVideoUrl.size() <= 2048))
+        && (!('aiSourceWidth' in data) || (data.aiSourceWidth is int && data.aiSourceWidth >= 0 && data.aiSourceWidth <= 16384))
+        && (!('aiSourceHeight' in data) || (data.aiSourceHeight is int && data.aiSourceHeight >= 0 && data.aiSourceHeight <= 16384))
+        && (!('aiOutputWidth' in data) || (data.aiOutputWidth is int && data.aiOutputWidth >= 0 && data.aiOutputWidth <= 16384))
+        && (!('aiOutputHeight' in data) || (data.aiOutputHeight is int && data.aiOutputHeight >= 0 && data.aiOutputHeight <= 16384))
+        && (!('subtitles' in data) || (
+          data.subtitles is map
+          && data.subtitles.keys().hasOnly(['hindi', 'english'])
+          && (!('hindi' in data.subtitles) || isValidSubtitleTrack(data.subtitles.hindi))
+          && (!('english' in data.subtitles) || isValidSubtitleTrack(data.subtitles.english))
+        ))
+        && (!('subtitleStatus' in data) || data.subtitleStatus in ['none', 'queued', 'processing', 'completed', 'failed', 'unavailable'])
+        && (!('subtitleError' in data) || (data.subtitleError is string && data.subtitleError.size() <= 500))
+        && data.isPublished is bool
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidDeletedAnime(data, targetId) {
+      return data.keys().hasAll(['animeId', 'deletedAt'])
+        && data.keys().hasOnly(['animeId', 'deletedAt'])
+        && isValidId(data.animeId)
+        && data.animeId == targetId
+        && data.deletedAt is timestamp;
+    }
+
+    function isValidUserProfile(data, targetUid) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'themeMode', 'colorTheme', 'safeMode', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'profilePicture', 'themeMode', 'colorTheme',
+          'backgroundPoster', 'safeMode', 'soundEnabled', 'soundPack',
+          'favorites', 'watchlist', 'preferredSubtitleLanguage', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == targetUid
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 32
+        && (!('profilePicture' in data) || (data.profilePicture is string && data.profilePicture.size() <= 500000))
+        && data.themeMode in ['dark', 'light', 'system']
+        && data.colorTheme in ['emerald', 'crimson', 'graphite', 'astral', 'ios']
+        && (!('backgroundPoster' in data) || (data.backgroundPoster is string && data.backgroundPoster.size() <= 32))
+        && data.safeMode is bool
+        && (!('soundEnabled' in data) || data.soundEnabled is bool)
+        && (!('soundPack' in data) || data.soundPack in ['cyber', 'retro', 'soft'])
+        && (!('favorites' in data) || (data.favorites is list && data.favorites.size() <= 200 && (data.favorites.size() == 0 || data.favorites[0] is string)))
+        && (!('watchlist' in data) || (data.watchlist is list && data.watchlist.size() <= 200 && (data.watchlist.size() == 0 || data.watchlist[0] is string)))
+        && (!('preferredSubtitleLanguage' in data) || data.preferredSubtitleLanguage in ['off', 'Hindi', 'English'])
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWatchHistory(data, targetUid, historyId) {
+      return data.keys().hasAll([
+          'id', 'uid', 'animeId', 'animeTitle', 'episodeId', 'episodeNumber',
+          'progressSeconds', 'durationSeconds', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'uid', 'animeId', 'animeTitle', 'episodeId', 'episodeNumber',
+          'episodeTitle', 'season', 'language', 'poster',
+          'progressSeconds', 'durationSeconds', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == historyId
+        && isValidId(data.uid)
+        && data.uid == targetUid
+        && data.uid == request.auth.uid
+        && isValidId(data.animeId)
+        && data.animeTitle is string && data.animeTitle.size() >= 1 && data.animeTitle.size() <= 200
+        && data.episodeId is string && data.episodeId.size() >= 1 && data.episodeId.size() <= 128
+        && data.episodeNumber is int && data.episodeNumber >= 0 && data.episodeNumber <= 10000
+        && (!('episodeTitle' in data) || (data.episodeTitle is string && data.episodeTitle.size() <= 200))
+        && (!('season' in data) || (data.season is int && data.season >= 1 && data.season <= 200))
+        && (!('language' in data) || (data.language is string && data.language.size() <= 40))
+        && (!('poster' in data) || (data.poster is string && data.poster.size() <= 500000))
+        && (data.progressSeconds is int || data.progressSeconds is float) && data.progressSeconds >= 0
+        && (data.durationSeconds is int || data.durationSeconds is float) && data.durationSeconds >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    match /anime/{animeId} {
+      allow get: if isValidId(animeId) && (existing().isPublished == true || isAdmin());
+      allow list: if existing().isPublished == true || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(animeId)
+        && isValidAnime(incoming())
+        && incoming().id == animeId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(animeId)
+        && isValidAnime(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'titleJapanese', 'synopsis', 'posterImage', 'bannerImage',
+          'genres', 'rating', 'ratingVerified', 'status', 'year', 'seasons', 'episodesCount',
+          'isPublished', 'featured', 'streamingSources', 'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(animeId);
+
+      match /episodes/{episodeId} {
+        allow get: if isValidId(animeId)
+          && isValidId(episodeId)
+          && (get(/databases/$(database)/documents/anime/$(animeId)).data.isPublished == true || isAdmin());
+        allow list: if existing().isPublished == true || isAdmin();
+        allow create: if isAdmin()
+          && isValidId(animeId)
+          && isValidId(episodeId)
+          && exists(/databases/$(database)/documents/anime/$(animeId))
+          && isValidEpisode(incoming(), animeId)
+          && incoming().id == episodeId
+          && incoming().createdAt == request.time
+          && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
+        allow update: if isAdmin()
+          && isValidId(animeId)
+          && isValidId(episodeId)
+          && isValidEpisode(incoming(), animeId)
+          && incoming().id == existing().id
+          && incoming().animeId == existing().animeId
+          && incoming().createdAt == existing().createdAt
+          && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'number', 'season', 'title', 'language', 'synopsis', 'description',
+            'duration', 'videoUrl', 'thumbnailUrl', 'order', 'sources', 'subtitles',
+            'subtitleStatus', 'subtitleError',
+            'aiEnhanced', 'aiEnhancementModel', 'aiEnhancementStatus', 'aiOriginalVideoUrl',
+            'aiSourceWidth', 'aiSourceHeight', 'aiOutputWidth', 'aiOutputHeight',
+            'isPublished', 'updatedAt'
+          ]);
+        allow delete: if isAdmin() && isValidId(animeId) && isValidId(episodeId);
+      }
+    }
+
+    match /deletedAnime/{animeId} {
+      allow get: if isValidId(animeId);
+      allow list: if true;
+      allow create: if isAdmin()
+        && isValidId(animeId)
+        && isValidDeletedAnime(incoming(), animeId)
+        && incoming().deletedAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(animeId);
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'profilePicture', 'themeMode', 'colorTheme',
+          'backgroundPoster', 'safeMode', 'soundEnabled', 'soundPack',
+          'favorites', 'watchlist', 'preferredSubtitleLanguage', 'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /watchHistory/{historyId} {
+        allow get: if isValidId(userId) && isValidId(historyId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(historyId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidWatchHistory(incoming(), userId, historyId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(historyId)
+          && isOwner(userId)
+          && isValidWatchHistory(incoming(), userId, historyId)
+          && incoming().uid == existing().uid
+          && incoming().id == existing().id
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'animeId', 'animeTitle', 'episodeId', 'episodeNumber',
+            'episodeTitle', 'season', 'language', 'poster',
+            'progressSeconds', 'durationSeconds', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(historyId) && isOwner(userId);
+      }
+    }
+  }
+}

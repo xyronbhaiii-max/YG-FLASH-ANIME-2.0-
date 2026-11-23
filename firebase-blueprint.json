@@ -1,0 +1,398 @@
+{
+  "entities": {
+    "Anime": {
+      "title": "Anime",
+      "description": "Anime or movie catalog entry with metadata, poster, banner, seasons, episodes count, and streaming sources.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "titleJapanese": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "synopsis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        "posterImage": {
+          "type": "string",
+          "maxLength": 200000
+        },
+        "bannerImage": {
+          "type": "string",
+          "maxLength": 200000
+        },
+        "genres": {
+          "type": "array"
+        },
+        "rating": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "ratingVerified": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Ongoing", "Completed"]
+        },
+        "year": {
+          "type": "number"
+        },
+        "seasons": {
+          "type": "number"
+        },
+        "episodesCount": {
+          "type": "number"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "featured": {
+          "type": "boolean"
+        },
+        "streamingSources": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "synopsis",
+        "posterImage",
+        "rating",
+        "status",
+        "year",
+        "episodesCount",
+        "isPublished",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Episode": {
+      "title": "Episode",
+      "description": "Individual episode or movie stream belonging to an anime entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "animeId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "number": {
+          "type": "number"
+        },
+        "season": {
+          "type": "number"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "aiEnhanced": {
+          "type": "boolean"
+        },
+        "aiEnhancementModel": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "aiEnhancementStatus": {
+          "type": "string",
+          "enum": ["none", "queued", "processing", "completed", "failed", "unavailable"]
+        },
+        "aiOriginalVideoUrl": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "aiSourceWidth": {
+          "type": "number"
+        },
+        "aiSourceHeight": {
+          "type": "number"
+        },
+        "aiOutputWidth": {
+          "type": "number"
+        },
+        "aiOutputHeight": {
+          "type": "number"
+        },
+        "synopsis": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "duration": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "videoUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "order": {
+          "type": "number"
+        },
+        "sources": {
+          "type": "array"
+        },
+        "subtitles": {
+          "type": "object",
+          "description": "Synchronized WebVTT subtitle tracks keyed by language (hindi, english)."
+        },
+        "subtitleStatus": {
+          "type": "string",
+          "enum": ["none", "queued", "processing", "completed", "failed", "unavailable"]
+        },
+        "subtitleError": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "animeId",
+        "number",
+        "title",
+        "videoUrl",
+        "isPublished",
+        "createdAt"
+      ]
+    },
+    "DeletedAnimeRecord": {
+      "title": "DeletedAnimeRecord",
+      "description": "Tombstone marker for deleted anime IDs so clients purge stale watch history.",
+      "type": "object",
+      "properties": {
+        "animeId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["animeId", "deletedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Persistent user identity, username, theme preferences, favorites, watchlist, and settings keyed by permanent UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "profilePicture": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["dark", "light", "system"]
+        },
+        "colorTheme": {
+          "type": "string",
+          "enum": ["emerald", "crimson", "graphite", "astral", "ios"]
+        },
+        "backgroundPoster": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "safeMode": {
+          "type": "boolean"
+        },
+        "soundEnabled": {
+          "type": "boolean"
+        },
+        "soundPack": {
+          "type": "string",
+          "enum": ["cyber", "retro", "soft"]
+        },
+        "favorites": {
+          "type": "array"
+        },
+        "watchlist": {
+          "type": "array"
+        },
+        "preferredSubtitleLanguage": {
+          "type": "string",
+          "enum": ["off", "Hindi", "English"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "themeMode",
+        "colorTheme",
+        "safeMode",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WatchHistoryEntry": {
+      "title": "WatchHistoryEntry",
+      "description": "Per-user persistent Continue Watching progress entry for an episode.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "uid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "animeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "animeTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "episodeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "episodeNumber": {
+          "type": "number"
+        },
+        "episodeTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "season": {
+          "type": "number"
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "poster": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "progressSeconds": {
+          "type": "number"
+        },
+        "durationSeconds": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "uid",
+        "animeId",
+        "animeTitle",
+        "episodeId",
+        "episodeNumber",
+        "progressSeconds",
+        "durationSeconds",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/anime/{animeId}": {
+      "schema": { "$ref": "#/entities/Anime" },
+      "description": "Anime and movie catalog entries."
+    },
+    "/anime/{animeId}/episodes/{episodeId}": {
+      "schema": { "$ref": "#/entities/Episode" },
+      "description": "Episodes belonging to a specific anime."
+    },
+    "/deletedAnime/{animeId}": {
+      "schema": { "$ref": "#/entities/DeletedAnimeRecord" },
+      "description": "Tombstone records for deleted anime."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile, persistent username, theme preferences, favorites, watchlist, and settings keyed by UID."
+    },
+    "/users/{userId}/watchHistory/{historyId}": {
+      "schema": { "$ref": "#/entities/WatchHistoryEntry" },
+      "description": "Persistent Continue Watching progress records for the user."
+    }
+  }
+}
