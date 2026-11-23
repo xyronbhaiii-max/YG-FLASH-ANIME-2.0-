@@ -28,6 +28,7 @@ import {
 import { useApp, ThemeType, ThemeMode } from "../context/AppContext";
 import { auth } from "../lib/firebase";
 import { sound, SoundPack } from "../utils/sound";
+import { apiUrl } from "../utils/apiUrl";
 import { BLINK_STAR_IMAGE, BRAND_LOGO_IMAGE } from "../assets/brandAssetsData";
 
 export const ProfileAndSettingsView: React.FC = () => {
@@ -161,7 +162,7 @@ export const ProfileAndSettingsView: React.FC = () => {
           if (token) headers.Authorization = `Bearer ${token}`;
         } catch {}
       }
-      await fetch("/api/user/profile-picture", {
+      await fetch(apiUrl("/api/user/profile-picture"), {
         method: "POST",
         credentials: "include",
         headers,
@@ -183,7 +184,7 @@ export const ProfileAndSettingsView: React.FC = () => {
           if (token) headers.Authorization = `Bearer ${token}`;
         } catch {}
       }
-      await fetch(`/api/user/profile-picture?userId=${encodeURIComponent(userId)}`, {
+      await fetch(apiUrl(`/api/user/profile-picture?userId=${encodeURIComponent(userId)}`), {
         method: "DELETE",
         credentials: "include",
         headers,

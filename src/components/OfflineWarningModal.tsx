@@ -84,6 +84,7 @@ export const OfflineWarningModal: React.FC = () => {
           if (wasOfflineRef.current) {
             wasOfflineRef.current = false;
             setOfflineReason(null);
+            window.dispatchEvent(new CustomEvent("yg:network-restored"));
             if (options?.showRestoredToast !== false) {
               sound.playSuccess();
               setRestoredToast(true);
@@ -114,6 +115,7 @@ export const OfflineWarningModal: React.FC = () => {
             if (wasOfflineRef.current) {
               wasOfflineRef.current = false;
               setOfflineReason(null);
+              window.dispatchEvent(new CustomEvent("yg:network-restored"));
               if (options?.showRestoredToast !== false) {
                 sound.playSuccess();
                 setRestoredToast(true);
@@ -309,16 +311,15 @@ export const OfflineWarningModal: React.FC = () => {
             </span>
           </div>
 
-          <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-            {isNoDataPlan
-              ? "Oohh Damn bro! No Net / Recharge Issue! ⚠️"
-              : "Oohh Damn bro! Your Net is Off! ⚠️"}
+          <h2 className="text-xl sm:text-2xl font-black text-white tracking-wider uppercase">
+            YOU ARE OFFLINE
           </h2>
 
           <p className="text-xs text-[var(--text-muted)] leading-relaxed px-2">
+            Please check your internet connection and try again.
             {isNoDataPlan
-              ? "Your mobile data or Wi-Fi is switched ON, but no active internet was detected (no data pack/recharge or very slow signal). Fix your connection to watch anime!"
-              : "No internet connection detected. Turn your Wi-Fi or mobile data back on to continue streaming episodes!"}
+              ? " Active Wi-Fi or mobile data is connected without internet access."
+              : ""}
           </p>
         </div>
 

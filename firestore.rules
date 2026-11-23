@@ -37,6 +37,17 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidCastMember(c) {
+      return c is map
+        && c.keys().hasAll(['characterName', 'voiceActor'])
+        && c.keys().hasOnly(['characterName', 'characterImage', 'voiceActor', 'language', 'role'])
+        && c.characterName is string && c.characterName.size() <= 160
+        && c.voiceActor is string && c.voiceActor.size() <= 160
+        && (!('characterImage' in c) || (c.characterImage is string && c.characterImage.size() <= 2048))
+        && (!('language' in c) || (c.language is string && c.language.size() <= 64))
+        && (!('role' in c) || (c.role is string && c.role.size() <= 64));
+    }
+
     function isValidAnime(data) {
       return data.keys().hasAll([
           'id', 'title', 'synopsis', 'posterImage', 'rating',
@@ -45,7 +56,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'title', 'titleJapanese', 'synopsis', 'posterImage', 'bannerImage',
           'genres', 'rating', 'ratingVerified', 'status', 'year', 'seasons', 'episodesCount',
-          'isPublished', 'featured', 'streamingSources', 'createdAt', 'updatedAt'
+          'isPublished', 'featured', 'trending', 'studio', 'author', 'director',
+          'productionCompany', 'cast', 'streamingSources', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
@@ -62,6 +74,12 @@ service cloud.firestore {
         && data.episodesCount is int && data.episodesCount >= 0 && data.episodesCount <= 10000
         && data.isPublished is bool
         && (!('featured' in data) || data.featured is bool)
+        && (!('trending' in data) || data.trending is bool)
+        && (!('studio' in data) || (data.studio is string && data.studio.size() <= 200))
+        && (!('author' in data) || (data.author is string && data.author.size() <= 200))
+        && (!('director' in data) || (data.director is string && data.director.size() <= 200))
+        && (!('productionCompany' in data) || (data.productionCompany is string && data.productionCompany.size() <= 200))
+        && (!('cast' in data) || (data.cast is list && data.cast.size() <= 30 && (data.cast.size() == 0 || isValidCastMember(data.cast[0]))))
         && (!('streamingSources' in data) || (data.streamingSources is list && data.streamingSources.size() <= 15 && (data.streamingSources.size() == 0 || data.streamingSources[0] is map)))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -86,7 +104,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'animeId', 'number', 'season', 'title', 'language', 'synopsis', 'description',
-          'duration', 'videoUrl', 'thumbnailUrl', 'order', 'sources', 'subtitles',
+          'duration', 'releaseDate', 'bunnyVideoId', 'videoUrl', 'thumbnailUrl', 'order', 'sources', 'subtitles',
           'subtitleStatus', 'subtitleError',
           'aiEnhanced', 'aiEnhancementModel', 'aiEnhancementStatus', 'aiOriginalVideoUrl',
           'aiSourceWidth', 'aiSourceHeight', 'aiOutputWidth', 'aiOutputHeight',
@@ -102,6 +120,8 @@ service cloud.firestore {
         && (!('synopsis' in data) || (data.synopsis is string && data.synopsis.size() <= 2000))
         && (!('description' in data) || (data.description is string && data.description.size() <= 2000))
         && (!('duration' in data) || (data.duration is string && data.duration.size() <= 32))
+        && (!('releaseDate' in data) || (data.releaseDate is string && data.releaseDate.size() <= 40))
+        && (!('bunnyVideoId' in data) || (data.bunnyVideoId is string && data.bunnyVideoId.size() <= 128))
         && data.videoUrl is string && data.videoUrl.size() >= 1 && data.videoUrl.size() <= 2048
         && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 500000))
         && (!('order' in data) || (data.order is int && data.order >= 0 && data.order <= 100000))
@@ -208,7 +228,8 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'title', 'titleJapanese', 'synopsis', 'posterImage', 'bannerImage',
           'genres', 'rating', 'ratingVerified', 'status', 'year', 'seasons', 'episodesCount',
-          'isPublished', 'featured', 'streamingSources', 'updatedAt'
+          'isPublished', 'featured', 'trending', 'studio', 'author', 'director',
+          'productionCompany', 'cast', 'streamingSources', 'updatedAt'
         ]);
       allow delete: if isAdmin() && isValidId(animeId);
 
@@ -235,7 +256,7 @@ service cloud.firestore {
           && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'number', 'season', 'title', 'language', 'synopsis', 'description',
-            'duration', 'videoUrl', 'thumbnailUrl', 'order', 'sources', 'subtitles',
+            'duration', 'releaseDate', 'bunnyVideoId', 'videoUrl', 'thumbnailUrl', 'order', 'sources', 'subtitles',
             'subtitleStatus', 'subtitleError',
             'aiEnhanced', 'aiEnhancementModel', 'aiEnhancementStatus', 'aiOriginalVideoUrl',
             'aiSourceWidth', 'aiSourceHeight', 'aiOutputWidth', 'aiOutputHeight',

@@ -13,6 +13,7 @@ import { ProfileAndSettingsView } from "./views/ProfileAndSettingsView";
 import { VideoPlayerModal } from "./views/VideoPlayerModal";
 
 import { OfflineWarningModal } from "./components/OfflineWarningModal";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const MainAppContent: React.FC = () => {
   const {
@@ -117,8 +118,10 @@ const MainAppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AppProvider>
-      <MainAppContent />
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <MainAppContent />
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

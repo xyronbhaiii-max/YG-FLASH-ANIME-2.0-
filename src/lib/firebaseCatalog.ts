@@ -31,6 +31,7 @@ import {
 import { apiUrl } from "../utils/apiUrl";
 import {
   type Anime,
+  type AnimeCastMember,
   type Episode,
   type EpisodeLanguage,
   type ThemeType,
@@ -114,9 +115,33 @@ function normalizeEpisodesCount(val: unknown, fallback = 0): number {
   return Math.max(0, Math.min(10000, Math.round(num)));
 }
 
+function sanitizeCastList(raw: unknown): AnimeCastMember[] {
+  if (!Array.isArray(raw)) return [];
+  const cleaned: AnimeCastMember[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const characterName = String((item as any).characterName || "").trim().slice(0, 160);
+    const voiceActor = String((item as any).voiceActor || "").trim().slice(0, 160);
+    if (!characterName && !voiceActor) continue;
+    const characterImage = String((item as any).characterImage || "").trim().slice(0, 2048);
+    const language = String((item as any).language || "").trim().slice(0, 64);
+    const role = String((item as any).role || "").trim().slice(0, 64);
+    cleaned.push({
+      characterName: characterName || "Character",
+      voiceActor: voiceActor || "Uncredited",
+      ...(characterImage ? { characterImage } : {}),
+      ...(language ? { language } : {}),
+      ...(role ? { role } : {}),
+    });
+    if (cleaned.length >= 30) break;
+  }
+  return cleaned;
+}
+
 function normalizeAnimeRecord(raw: any, fallbackId?: string): Anime {
   const id = String(raw?.id || fallbackId || "");
   const cleanRating = String(raw?.rating || "").trim().slice(0, 32) || "13+";
+  const cast = sanitizeCastList(raw?.cast);
   return {
     id,
     title: String(raw?.title || ""),
@@ -134,6 +159,14 @@ function normalizeAnimeRecord(raw: any, fallbackId?: string): Anime {
     episodesCount: normalizeEpisodesCount(raw?.episodesCount, 0),
     isPublished: raw?.isPublished !== false,
     featured: Boolean(raw?.featured),
+    trending: Boolean(raw?.trending),
+    ...(typeof raw?.studio === "string" && raw.studio.trim() ? { studio: raw.studio.trim().slice(0, 200) } : {}),
+    ...(typeof raw?.author === "string" && raw.author.trim() ? { author: raw.author.trim().slice(0, 200) } : {}),
+    ...(typeof raw?.director === "string" && raw.director.trim() ? { director: raw.director.trim().slice(0, 200) } : {}),
+    ...(typeof raw?.productionCompany === "string" && raw.productionCompany.trim()
+      ? { productionCompany: raw.productionCompany.trim().slice(0, 200) }
+      : {}),
+    ...(cast.length > 0 ? { cast } : {}),
     streamingSources: Array.isArray(raw?.streamingSources)
       ? raw.streamingSources
       : [],
@@ -215,6 +248,12 @@ function normalizeEpisodeRecord(raw: any, fallbackId?: string): Episode {
     synopsis: desc,
     description: desc,
     duration: String(raw?.duration || "24m"),
+    ...(typeof raw?.releaseDate === "string" && raw.releaseDate.trim()
+      ? { releaseDate: raw.releaseDate.trim().slice(0, 40) }
+      : {}),
+    ...(typeof raw?.bunnyVideoId === "string" && raw.bunnyVideoId.trim()
+      ? { bunnyVideoId: raw.bunnyVideoId.trim().slice(0, 128) }
+      : {}),
     videoUrl: String(raw?.videoUrl || ""),
     thumbnailUrl: String(raw?.thumbnailUrl || ""),
     order: raw?.order !== undefined && !isNaN(Number(raw.order)) ? Number(raw.order) : num,
@@ -243,6 +282,12 @@ export async function saveAnimeToFirebase(
     String(anime.synopsis || "").trim().slice(0, 5000) ||
     `Stream ${anime.title} in high speed on YG Flash Anime.`.slice(0, 5000);
 
+  const cleanStudio = String(anime.studio || "").trim().slice(0, 200);
+  const cleanAuthor = String(anime.author || "").trim().slice(0, 200);
+  const cleanDirector = String(anime.director || "").trim().slice(0, 200);
+  const cleanProductionCompany = String(anime.productionCompany || "").trim().slice(0, 200);
+  const cleanCast = sanitizeCastList(anime.cast);
+
   const rtdbPayload = {
     id: anime.id,
     title: anime.title,
@@ -259,6 +304,12 @@ export async function saveAnimeToFirebase(
     episodesCount: normalizedCount,
     isPublished: Boolean(anime.isPublished),
     featured: Boolean(anime.featured),
+    trending: Boolean(anime.trending),
+    studio: cleanStudio,
+    author: cleanAuthor,
+    director: cleanDirector,
+    productionCompany: cleanProductionCompany,
+    cast: cleanCast,
     streamingSources: anime.streamingSources || [],
     createdAt: anime.createdAt || new Date().toISOString(),
     updatedAt: anime.updatedAt || new Date().toISOString(),
@@ -295,6 +346,12 @@ export async function saveAnimeToFirebase(
         episodesCount: normalizedCount,
         isPublished: Boolean(anime.isPublished),
         featured: Boolean(anime.featured),
+        trending: Boolean(anime.trending),
+        studio: cleanStudio,
+        author: cleanAuthor,
+        director: cleanDirector,
+        productionCompany: cleanProductionCompany,
+        cast: cleanCast,
         streamingSources: (anime.streamingSources || []).slice(0, 15),
         updatedAt: serverTimestamp(),
       };
@@ -421,6 +478,12 @@ async function ensureFirestoreParentAnime(animeId: string, parentAnime?: Anime) 
         episodesCount: normalizeEpisodesCount(parentAnime.episodesCount, 0),
         isPublished: Boolean(parentAnime.isPublished),
         featured: Boolean(parentAnime.featured),
+        trending: Boolean(parentAnime.trending),
+        studio: String(parentAnime.studio || "").trim().slice(0, 200),
+        author: String(parentAnime.author || "").trim().slice(0, 200),
+        director: String(parentAnime.director || "").trim().slice(0, 200),
+        productionCompany: String(parentAnime.productionCompany || "").trim().slice(0, 200),
+        cast: sanitizeCastList(parentAnime.cast),
         streamingSources: (parentAnime.streamingSources || []).slice(0, 15),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -450,6 +513,9 @@ export async function saveEpisodeToFirebase(
   const epOrder = Math.max(0, Math.round(episode.order ?? epNum));
   const nowIso = new Date().toISOString();
 
+  const cleanReleaseDate = String(episode.releaseDate || "").trim().slice(0, 40);
+  const cleanBunnyVideoId = String(episode.bunnyVideoId || "").trim().slice(0, 128);
+
   const rtdbPayload = {
     id: episode.id,
     animeId: episode.animeId,
@@ -460,6 +526,8 @@ export async function saveEpisodeToFirebase(
     synopsis: desc,
     description: desc,
     duration: episode.duration || "24m",
+    ...(cleanReleaseDate ? { releaseDate: cleanReleaseDate } : {}),
+    ...(cleanBunnyVideoId ? { bunnyVideoId: cleanBunnyVideoId } : {}),
     videoUrl: episode.videoUrl,
     thumbnailUrl: episode.thumbnailUrl || "",
     order: epOrder,
@@ -494,6 +562,8 @@ export async function saveEpisodeToFirebase(
         synopsis: desc.slice(0, 2000),
         description: desc.slice(0, 2000),
         duration: (episode.duration || "24m").slice(0, 32),
+        releaseDate: cleanReleaseDate,
+        bunnyVideoId: cleanBunnyVideoId,
         videoUrl: episode.videoUrl.slice(0, 2048),
         thumbnailUrl: (episode.thumbnailUrl || "").slice(0, 500000),
         order: epOrder,

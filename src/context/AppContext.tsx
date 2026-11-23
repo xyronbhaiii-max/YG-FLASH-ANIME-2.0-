@@ -69,6 +69,14 @@ export const POSTER_WALLPAPERS: Record<BackgroundPoster, string | null> = {
   mikey: "/assets/aistudio/20c40a85225912e40b51a4b4c302cc00_90a378e3.jpg",
 };
 
+export interface AnimeCastMember {
+  characterName: string;
+  characterImage?: string;
+  voiceActor: string;
+  language?: string;
+  role?: string;
+}
+
 export interface Anime {
   id: string;
   title: string;
@@ -85,6 +93,12 @@ export interface Anime {
   episodesCount: number;
   isPublished: boolean;
   featured?: boolean;
+  trending?: boolean;
+  studio?: string;
+  author?: string;
+  director?: string;
+  productionCompany?: string;
+  cast?: AnimeCastMember[];
   streamingSources?: { name: string; url: string; quality?: string }[];
   createdAt: string;
   updatedAt: string;
@@ -110,6 +124,8 @@ export interface Episode {
   synopsis?: string;
   description?: string;
   duration?: string;
+  releaseDate?: string;
+  bunnyVideoId?: string;
   videoUrl: string;
   thumbnailUrl?: string;
   order?: number;

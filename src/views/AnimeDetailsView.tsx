@@ -11,6 +11,10 @@ import {
   ListVideo,
   ListPlus,
   ListCheck,
+  Building2,
+  Users,
+  Sparkles,
+  Calendar,
 } from "lucide-react";
 import { useApp, Anime, Episode, EPISODE_LANGUAGES } from "../context/AppContext";
 import { getValidAdminIdToken } from "../lib/firebase";
@@ -31,6 +35,7 @@ export const AnimeDetailsView: React.FC = () => {
   const {
     selectedAnimeId,
     goBack,
+    navigateTo,
     catalog,
     startPlayback,
     favorites,
@@ -266,6 +271,49 @@ export const AnimeDetailsView: React.FC = () => {
     }
     return Array.from(groups.entries()).sort((a, b) => a[0] - b[0]);
   }, [filteredEpisodes]);
+
+  const relatedAnime = useMemo(() => {
+    if (!anime || catalog.length === 0) return [];
+    const currentGenres = new Set(
+      (Array.isArray(anime.genres) ? anime.genres : []).map((g) => g.trim().toLowerCase())
+    );
+    const affinityByGenre = new Map<string, number>();
+    for (const h of history) {
+      const matched = catalog.find((c) => c.id === h.animeId);
+      if (matched && Array.isArray(matched.genres)) {
+        for (const g of matched.genres) {
+          const key = g.trim().toLowerCase();
+          if (key) affinityByGenre.set(key, (affinityByGenre.get(key) || 0) + 1);
+        }
+      }
+    }
+
+    const seen = new Set<string>([anime.id]);
+    const scored: { item: Anime; score: number }[] = [];
+    for (const candidate of catalog) {
+      if (!candidate?.id || seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      let score = 0;
+      const candGenres = Array.isArray(candidate.genres) ? candidate.genres : [];
+      for (const g of candGenres) {
+        const key = g.trim().toLowerCase();
+        if (currentGenres.has(key)) score += 10;
+        if (affinityByGenre.has(key)) score += Math.min(6, affinityByGenre.get(key)! * 2);
+      }
+      if (candidate.studio && anime.studio && candidate.studio.toLowerCase() === anime.studio.toLowerCase()) {
+        score += 5;
+      }
+      if (candidate.trending) score += 3;
+      if (candidate.featured) score += 2;
+      if (Math.abs((candidate.year || 0) - (anime.year || 0)) <= 3) score += 2;
+      scored.push({ item: candidate, score });
+    }
+
+    return scored
+      .sort((a, b) => b.score - a.score || (b.item.year || 0) - (a.item.year || 0))
+      .slice(0, 6)
+      .map((entry) => entry.item);
+  }, [anime, catalog, history]);
 
   if (!selectedAnimeId || (!anime && !isLoading)) {
     return (
@@ -719,6 +767,12 @@ export const AnimeDetailsView: React.FC = () => {
                               <p className="text-xs text-neutral-300 truncate mt-0.5 font-medium">
                                 {primaryEp.title}
                               </p>
+                              {primaryEp.releaseDate && (
+                                <p className="text-[10px] text-[var(--text-muted)] flex items-center gap-1 mt-0.5">
+                                  <Calendar className="w-3 h-3 text-[var(--primary)]" />
+                                  <span>{primaryEp.releaseDate}</span>
+                                </p>
+                              )}
                               <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
                                 {versions.map((ver) => {
                                   const sortedVers = sortSourcesByQuality(
@@ -778,6 +832,144 @@ export const AnimeDetailsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Production & Creative Credits (Strict per-anime metadata, never shared across series) */}
+      <div className="p-5 rounded-3xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-4">
+        <div className="flex items-center gap-2">
+          <Building2 className="w-5 h-5 text-[var(--primary)]" />
+          <h2 className="text-base sm:text-lg font-bold text-white">Production &amp; Credits</h2>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="p-3.5 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] space-y-1">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+              Animation Studio
+            </span>
+            <p className="text-xs sm:text-sm font-semibold text-white truncate">
+              {anime.studio?.trim() || "Information unavailable"}
+            </p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] space-y-1">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+              Author / Creator
+            </span>
+            <p className="text-xs sm:text-sm font-semibold text-white truncate">
+              {anime.author?.trim() || "Information unavailable"}
+            </p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] space-y-1">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+              Director
+            </span>
+            <p className="text-xs sm:text-sm font-semibold text-white truncate">
+              {anime.director?.trim() || "Information unavailable"}
+            </p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] space-y-1">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+              Production Company
+            </span>
+            <p className="text-xs sm:text-sm font-semibold text-white truncate">
+              {anime.productionCompany?.trim() || "Information unavailable"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Voice Actors & Characters */}
+      <div className="p-5 rounded-3xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Users className="w-5 h-5 text-[var(--primary)]" />
+            <h2 className="text-base sm:text-lg font-bold text-white">Characters &amp; Voice Actors</h2>
+          </div>
+          {Array.isArray(anime.cast) && anime.cast.length > 0 && (
+            <span className="text-[11px] font-semibold text-[var(--text-muted)]">
+              {anime.cast.length} Listed
+            </span>
+          )}
+        </div>
+
+        {Array.isArray(anime.cast) && anime.cast.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {anime.cast.map((member, idx) => (
+              <div
+                key={`${member.characterName}-${member.voiceActor}-${idx}`}
+                className="flex items-center gap-3 p-3 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]"
+              >
+                {member.characterImage ? (
+                  <img
+                    src={resolveMediaUrl(member.characterImage)}
+                    alt={member.characterName}
+                    loading="lazy"
+                    className="w-12 h-12 rounded-xl object-cover border border-[var(--border-subtle)] shrink-0 bg-black/40"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-xl bg-[var(--primary)]/15 border border-[var(--primary)]/30 flex items-center justify-center text-sm font-black text-[var(--primary)] shrink-0">
+                    {(member.characterName || "C").charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-white truncate">{member.characterName}</p>
+                  <p className="text-[11px] text-[var(--primary)] font-medium truncate">
+                    VA: {member.voiceActor}
+                  </p>
+                  {(member.role || member.language) && (
+                    <p className="text-[10px] text-[var(--text-muted)] truncate mt-0.5">
+                      {[member.role, member.language].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-4 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs text-[var(--text-muted)]">
+            Information unavailable
+          </div>
+        )}
+      </div>
+
+      {/* More Like This Recommendations */}
+      {relatedAnime.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-[var(--primary)]" />
+            <h2 className="text-base sm:text-lg font-bold text-white">More Like This</h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            {relatedAnime.map((rec) => (
+              <div
+                key={`rec-${rec.id}`}
+                onClick={() => navigateTo("details", rec.id)}
+                className="group cursor-pointer rounded-2xl overflow-hidden bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] transition-all p-2 space-y-2 active:scale-95"
+              >
+                <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-neutral-900">
+                  <img
+                    src={resolveMediaUrl(rec.posterImage)}
+                    alt={rec.title}
+                    loading="lazy"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute top-1.5 right-1.5 yg-dark-surface px-1.5 py-0.5 rounded bg-black/75 text-[9px] font-bold text-white">
+                    {rec.rating}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-white truncate group-hover:text-[var(--primary)] transition-colors">
+                    {rec.title}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-muted)] truncate">
+                    {rec.year} · {(Array.isArray(rec.genres) ? rec.genres[0] : "") || "Anime"}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -23,10 +23,16 @@ import {
   ListPlus,
   ShieldCheck,
   ArrowUpDown,
+  Users,
+  BarChart3,
+  Building2,
+  TrendingUp,
+  Calendar,
 } from "lucide-react";
 import {
   useApp,
   Anime,
+  AnimeCastMember,
   Episode,
   EPISODE_LANGUAGES,
 } from "../context/AppContext";
@@ -106,6 +112,11 @@ export const AdminDashboardView: React.FC = () => {
   } = useApp();
 
   const [allAnime, setAllAnime] = useState<Anime[]>([]);
+  const [adminTab, setAdminTab] = useState<"catalog" | "insights">("catalog");
+  const [adminStats, setAdminStats] = useState<any | null>(null);
+  const [adminUsers, setAdminUsers] = useState<any[]>([]);
+  const [isLoadingInsights, setIsLoadingInsights] = useState<boolean>(false);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncingCloud, setIsSyncingCloud] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; isError?: boolean } | null>(null);
@@ -125,11 +136,18 @@ export const AdminDashboardView: React.FC = () => {
   const [newEpTitle, setNewEpTitle] = useState<string>("");
   const [newEpLanguagePreset, setNewEpLanguagePreset] = useState<string>("Japanese");
   const [newEpCustomLanguage, setNewEpCustomLanguage] = useState<string>("");
+  const [newEpReleaseDate, setNewEpReleaseDate] = useState<string>("");
+  const [newEpBunnyVideoId, setNewEpBunnyVideoId] = useState<string>("");
   const [newEpThumbnailUrl, setNewEpThumbnailUrl] = useState<string>("");
   const [newEpDescription, setNewEpDescription] = useState<string>("");
   const [epQualityUrls, setEpQualityUrls] = useState<Record<VideoQualityCode, string>>(
     createEmptyQualityMap
   );
+  const [hlsInspectState, setHlsInspectState] = useState<{
+    loading: boolean;
+    error?: string;
+    variants?: { height: number; width: number; bitrateKbps: number; resolution: string; label: string }[];
+  } | null>(null);
   const [showAllEpQualities, setShowAllEpQualities] = useState<boolean>(false);
   const [isSavingEpisode, setIsSavingEpisode] = useState<boolean>(false);
   const [isUploadingEpThumb, setIsUploadingEpThumb] = useState<boolean>(false);
@@ -172,7 +190,7 @@ export const AdminDashboardView: React.FC = () => {
   const [aniListResults, setAniListResults] = useState<any[]>([]);
   const [isSearchingAniList, setIsSearchingAniList] = useState<boolean>(false);
 
-  // Anime Form Fields (mobile-safe numeric string inputs + confirmed age rating + all 6 qualities)
+  // Anime Form Fields (mobile-safe numeric string inputs + confirmed age rating + all 6 qualities + credits/cast)
   const [formTitle, setFormTitle] = useState<string>("");
   const [formJapanese, setFormJapanese] = useState<string>("");
   const [formSynopsis, setFormSynopsis] = useState<string>("");
@@ -187,6 +205,13 @@ export const AdminDashboardView: React.FC = () => {
   const [formSeasonsInput, setFormSeasonsInput] = useState<string>("1");
   const [formEpisodesInput, setFormEpisodesInput] = useState<string>("0");
   const [formIsPublished, setFormIsPublished] = useState<boolean>(true);
+  const [formTrending, setFormTrending] = useState<boolean>(false);
+  const [formStudio, setFormStudio] = useState<string>("");
+  const [formAuthor, setFormAuthor] = useState<string>("");
+  const [formDirector, setFormDirector] = useState<string>("");
+  const [formProductionCompany, setFormProductionCompany] = useState<string>("");
+  const [formCast, setFormCast] = useState<AnimeCastMember[]>([]);
+  const [isFetchingCredits, setIsFetchingCredits] = useState<boolean>(false);
   const [formQualityUrls, setFormQualityUrls] = useState<Record<VideoQualityCode, string>>(
     createEmptyQualityMap
   );
@@ -297,11 +322,40 @@ export const AdminDashboardView: React.FC = () => {
     }
   };
 
+  const loadAdminInsights = async () => {
+    setIsLoadingInsights(true);
+    setInsightsError(null);
+    try {
+      const [statsRes, usersRes] = await Promise.all([
+        adminFetch("/api/admin/stats"),
+        adminFetch("/api/admin/users"),
+      ]);
+      if (statsRes.ok) {
+        const sData = await statsRes.json();
+        setAdminStats(sData.stats || null);
+      }
+      if (usersRes.ok) {
+        const uData = await usersRes.json();
+        setAdminUsers(Array.isArray(uData.users) ? uData.users : []);
+      }
+      if (!statsRes.ok || !usersRes.ok) {
+        setInsightsError("Some server metrics could not be fetched. Ensure backend admin token is active.");
+      }
+    } catch (err: any) {
+      setInsightsError(err?.message || "Failed to load admin statistics.");
+    } finally {
+      setIsLoadingInsights(false);
+    }
+  };
+
   useEffect(() => {
     if (isAdmin) {
       loadAdminAnime(true);
+      if (adminTab === "insights") {
+        loadAdminInsights();
+      }
     }
-  }, [isAdmin]);
+  }, [isAdmin, adminTab]);
 
   // Keep admin table synced from realtime catalog listeners without firing redundant API calls
   useEffect(() => {
@@ -369,6 +423,12 @@ export const AdminDashboardView: React.FC = () => {
     setFormSeasonsInput("1");
     setFormEpisodesInput("0");
     setFormIsPublished(true);
+    setFormTrending(false);
+    setFormStudio("");
+    setFormAuthor("");
+    setFormDirector("");
+    setFormProductionCompany("");
+    setFormCast([]);
     setFormQualityUrls(createEmptyQualityMap());
     setShowAllAnimeQualities(false);
     setAniListResults([]);
@@ -408,6 +468,12 @@ export const AdminDashboardView: React.FC = () => {
     setFormSeasonsInput(String(anime.seasons || 1));
     setFormEpisodesInput(String(anime.episodesCount ?? 0));
     setFormIsPublished(anime.isPublished);
+    setFormTrending(Boolean(anime.trending));
+    setFormStudio(anime.studio || "");
+    setFormAuthor(anime.author || "");
+    setFormDirector(anime.director || "");
+    setFormProductionCompany(anime.productionCompany || "");
+    setFormCast(Array.isArray(anime.cast) ? anime.cast : []);
 
     const nextQ = createEmptyQualityMap();
     for (const s of anime.streamingSources || []) {
@@ -475,12 +541,50 @@ export const AdminDashboardView: React.FC = () => {
       setFormRatingConfirmed(false);
     }
     if (result.status) setFormStatus(result.status);
+    setFormStudio(result.studio || "");
+    setFormAuthor(result.author || "");
+    setFormDirector(result.director || "");
+    setFormProductionCompany(result.productionCompany || result.studio || "");
+    setFormCast(Array.isArray(result.cast) ? result.cast : []);
     setAniListResults([]);
     sound.playSuccess();
     setModalFeedback({
-      text: `Auto-filled details for "${result.title}". Please verify and confirm Age Rating before saving!`,
+      text: `Auto-filled metadata, credits, and ${Array.isArray(result.cast) ? result.cast.length : 0} cast entries for "${result.title}". Confirm Age Rating before saving!`,
     });
     setTimeout(() => setModalFeedback(null), 4500);
+  };
+
+  const handleEnrichCreditsOnly = async () => {
+    const q = formTitle.trim();
+    if (!q) {
+      setModalFeedback({ text: "Enter the Anime English Title first to fetch credits.", isError: true });
+      return;
+    }
+    setIsFetchingCredits(true);
+    setModalFeedback(null);
+    sound.playClick();
+    try {
+      const res = await fetch(apiUrl(`/api/anilist/search?q=${encodeURIComponent(q)}`));
+      const data = await res.json();
+      const first = Array.isArray(data?.results) ? data.results[0] : null;
+      if (!res.ok || !first) {
+        setModalFeedback({ text: `No AniList credits found for "${q}".`, isError: true });
+        return;
+      }
+      if (first.studio) setFormStudio(first.studio);
+      if (first.author) setFormAuthor(first.author);
+      if (first.director) setFormDirector(first.director);
+      if (first.productionCompany) setFormProductionCompany(first.productionCompany);
+      if (Array.isArray(first.cast) && first.cast.length > 0) setFormCast(first.cast);
+      sound.playSuccess();
+      setModalFeedback({
+        text: `Enriched credits & ${Array.isArray(first.cast) ? first.cast.length : 0} cast members from AniList match "${first.title}".`,
+      });
+    } catch {
+      setModalFeedback({ text: "Could not reach AniList to enrich credits.", isError: true });
+    } finally {
+      setIsFetchingCredits(false);
+    }
   };
 
   // Compress gallery image into compact JPEG Data URL (for instant preview + reliable fallback)
@@ -794,6 +898,16 @@ export const AdminDashboardView: React.FC = () => {
       targetExisting?.synopsis ||
       `Stream ${formTitle.trim()} in high speed on YG Flash Anime.`;
 
+    const cleanCast = formCast
+      .map((c) => ({
+        characterName: String(c.characterName || "").trim(),
+        voiceActor: String(c.voiceActor || "").trim(),
+        ...(c.characterImage?.trim() ? { characterImage: c.characterImage.trim() } : {}),
+        ...(c.language?.trim() ? { language: c.language.trim() } : {}),
+        ...(c.role?.trim() ? { role: c.role.trim() } : {}),
+      }))
+      .filter((c) => c.characterName || c.voiceActor);
+
     const animeRecord: Anime = {
       id: recordId,
       title: formTitle.trim(),
@@ -809,6 +923,13 @@ export const AdminDashboardView: React.FC = () => {
       seasons: parsedSeasons,
       episodesCount: parsedEpisodesCount,
       isPublished: formIsPublished,
+      featured: targetExisting?.featured ?? false,
+      trending: formTrending,
+      ...(formStudio.trim() ? { studio: formStudio.trim() } : {}),
+      ...(formAuthor.trim() ? { author: formAuthor.trim() } : {}),
+      ...(formDirector.trim() ? { director: formDirector.trim() } : {}),
+      ...(formProductionCompany.trim() ? { productionCompany: formProductionCompany.trim() } : {}),
+      ...(cleanCast.length > 0 ? { cast: cleanCast } : {}),
       streamingSources: finalStreamingSources,
       createdAt: targetExisting?.createdAt || nowIso,
       updatedAt: nowIso,
@@ -995,8 +1116,11 @@ export const AdminDashboardView: React.FC = () => {
     setNewEpTitle(`Episode ${nextNum}`);
     setNewEpLanguagePreset("Japanese");
     setNewEpCustomLanguage("");
+    setNewEpReleaseDate("");
+    setNewEpBunnyVideoId("");
     setNewEpThumbnailUrl("");
     setNewEpDescription("");
+    setHlsInspectState(null);
     setEpQualityUrls(createEmptyQualityMap());
     setShowAllEpQualities(false);
     setEpVideoProgress(null);
@@ -1079,8 +1203,11 @@ export const AdminDashboardView: React.FC = () => {
       setNewEpLanguagePreset("Other");
       setNewEpCustomLanguage(existingLang);
     }
+    setNewEpReleaseDate(ep.releaseDate || "");
+    setNewEpBunnyVideoId(ep.bunnyVideoId || "");
     setNewEpThumbnailUrl(ep.thumbnailUrl || "");
     setNewEpDescription(ep.description ?? ep.synopsis ?? "");
+    setHlsInspectState(null);
 
     const nextQ = createEmptyQualityMap();
     if (Array.isArray(ep.sources)) {
@@ -1284,9 +1411,12 @@ export const AdminDashboardView: React.FC = () => {
       synopsis: cleanDesc,
       description: cleanDesc,
       duration: existingTarget?.duration || "24m",
+      ...(newEpReleaseDate.trim() ? { releaseDate: newEpReleaseDate.trim() } : {}),
+      ...(newEpBunnyVideoId.trim() ? { bunnyVideoId: newEpBunnyVideoId.trim() } : {}),
       videoUrl: primaryUrl,
       thumbnailUrl: newEpThumbnailUrl.trim(),
       order: isEditing ? (existingTarget?.order ?? epNum) : maxOrder + 1,
+      isPublished: existingTarget?.isPublished ?? managingAnimeEpisodes.isPublished,
       sources,
       createdAt: existingTarget?.createdAt || nowIso,
       updatedAt: nowIso,
@@ -1615,6 +1745,60 @@ export const AdminDashboardView: React.FC = () => {
     }
   };
 
+  const handleInspectHlsUrl = async () => {
+    const raw = epQualityUrls["1080p"].trim();
+    if (!raw) return;
+    setHlsInspectState({ loading: true });
+    sound.playClick();
+    try {
+      const res = await fetch(apiUrl(`/api/stream/hls-inspect?url=${encodeURIComponent(raw)}`));
+      const data = await res.json();
+      if (!res.ok) {
+        setHlsInspectState({ loading: false, error: data.error || "Failed to inspect HLS playlist." });
+        return;
+      }
+      setHlsInspectState({
+        loading: false,
+        variants: Array.isArray(data.variants) ? data.variants : [],
+      });
+    } catch {
+      setHlsInspectState({ loading: false, error: "Network error inspecting HLS playlist." });
+    }
+  };
+
+  const handleToggleEpisodePublish = async (ep: Episode) => {
+    if (!managingAnimeEpisodes) return;
+    sound.playClick();
+    const currentlyPublished = ep.isPublished !== false;
+    const nextPublished = !currentlyPublished;
+    const updatedEp: Episode = {
+      ...ep,
+      isPublished: nextPublished,
+      updatedAt: new Date().toISOString(),
+    };
+    setEpisodesList((prev) => prev.map((item) => (item.id === ep.id ? updatedEp : item)));
+    try {
+      const token = await getActiveToken();
+      await Promise.all([
+        saveEpisodeToFirebase(updatedEp, nextPublished, false, managingAnimeEpisodes),
+        token
+          ? fetch(apiUrl(`/api/admin/episodes/${ep.id}`), {
+              method: "PUT",
+              credentials: "include",
+              headers: buildAdminHeaders(token, { "Content-Type": "application/json" }),
+              body: JSON.stringify({ isPublished: nextPublished }),
+            })
+          : Promise.resolve(null),
+      ]);
+      refreshCatalog();
+      setEpModalFeedback({
+        text: `S${ep.season || 1}·E${ep.number} set to ${nextPublished ? "Live (Published)" : "Draft (Hidden)"}.`,
+      });
+    } catch (err: any) {
+      setEpModalFeedback({ text: err?.message || "Failed to toggle episode visibility.", isError: true });
+    }
+  };
+
   // Delete Episode
   const handleDeleteEpisode = async (epId: string) => {
     if (!managingAnimeEpisodes) return;
@@ -1775,7 +1959,161 @@ export const AdminDashboardView: React.FC = () => {
         </div>
       )}
 
-      {/* Catalog Table */}
+      {/* Admin Workspace Tabs */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            sound.playClick();
+            setAdminTab("catalog");
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors ${
+            adminTab === "catalog"
+              ? "bg-[var(--primary)] text-white shadow-sm"
+              : "bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white"
+          }`}
+        >
+          <Tv className="w-4 h-4" />
+          <span>Catalog ({allAnime.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            sound.playClick();
+            setAdminTab("insights");
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors ${
+            adminTab === "insights"
+              ? "bg-[var(--primary)] text-white shadow-sm"
+              : "bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white"
+          }`}
+        >
+          <BarChart3 className="w-4 h-4" />
+          <span>Stats &amp; Users</span>
+        </button>
+      </div>
+
+      {adminTab === "insights" ? (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-[var(--primary)]" />
+              <span>Platform Statistics &amp; Registered Accounts</span>
+            </h2>
+            <button
+              type="button"
+              onClick={loadAdminInsights}
+              disabled={isLoadingInsights}
+              className="px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs font-semibold text-white flex items-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingInsights ? "animate-spin" : ""}`} />
+              <span>Reload Stats</span>
+            </button>
+          </div>
+
+          {insightsError && (
+            <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs">
+              {insightsError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-bold">Total Anime</p>
+              <p className="text-2xl font-black text-white mt-1">
+                {adminStats?.totalAnime ?? allAnime.length}
+              </p>
+              <p className="text-[11px] text-emerald-400 mt-0.5">
+                {adminStats?.publishedAnime ?? allAnime.filter((a) => a.isPublished).length} Live
+              </p>
+            </div>
+            <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-bold">Total Episodes</p>
+              <p className="text-2xl font-black text-white mt-1">
+                {adminStats?.totalEpisodes ?? "—"}
+              </p>
+              <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                {adminStats?.publishedEpisodes ?? 0} Live · {adminStats?.draftEpisodes ?? 0} Draft
+              </p>
+            </div>
+            <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-bold">Trending &amp; Enriched</p>
+              <p className="text-2xl font-black text-white mt-1">
+                {adminStats?.trendingAnime ?? allAnime.filter((a) => a.trending).length}
+              </p>
+              <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                {adminStats?.enrichedCreditsAnime ?? allAnime.filter((a) => Boolean(a.studio || (a.cast && a.cast.length))).length} With Credits
+              </p>
+            </div>
+            <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-bold">Registered Users</p>
+              <p className="text-2xl font-black text-white mt-1">
+                {adminStats?.totalUsers ?? adminUsers.length}
+              </p>
+              <p className="text-[11px] text-[var(--primary)] mt-0.5">
+                Admin: {AUTHORIZED_ADMIN_EMAIL}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
+            <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-2">
+                <Users className="w-4 h-4 text-[var(--primary)]" />
+                <span>Registered Users ({adminUsers.length})</span>
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[var(--bg-surface)] text-[var(--text-muted)] border-b border-[var(--border-subtle)]">
+                  <tr>
+                    <th className="py-3 px-4 font-semibold">User</th>
+                    <th className="py-3 px-4 font-semibold">Role</th>
+                    <th className="py-3 px-4 font-semibold">Verified</th>
+                    <th className="py-3 px-4 font-semibold">Last Active</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border-subtle)]">
+                  {adminUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 px-4 text-center text-[var(--text-muted)]">
+                        {isLoadingInsights ? "Loading users..." : "No user records returned from server session."}
+                      </td>
+                    </tr>
+                  ) : (
+                    adminUsers.map((u) => (
+                      <tr key={u.uid} className="hover:bg-[var(--bg-surface)]/40">
+                        <td className="py-3 px-4">
+                          <p className="font-bold text-white">{u.displayName || "Viewer"}</p>
+                          <p className="text-[11px] text-[var(--text-muted)]">{u.email}</p>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              u.role === "admin"
+                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                : "bg-white/10 text-neutral-300"
+                            }`}
+                          >
+                            {u.role || "user"}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {u.emailVerified ? "Verified" : "Unverified"}
+                        </td>
+                        <td className="py-3 px-4 text-[11px] text-[var(--text-muted)]">
+                          {u.lastLogin ? new Date(u.lastLogin).toLocaleString() : "—"}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+      /* Catalog Table */
       <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden shadow-lg">
         <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
@@ -1891,6 +2229,7 @@ export const AdminDashboardView: React.FC = () => {
           </table>
         </div>
       </div>
+      )}
 
       {/* Add / Edit Anime Modal (Mobile-Safe Bounded Container, No Column Shift on Keyboard Open) */}
       {showAddEditModal && (
@@ -2372,18 +2711,171 @@ export const AdminDashboardView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Published Switch */}
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
-                  <input
-                    type="checkbox"
-                    id="pub-check"
-                    checked={formIsPublished}
-                    onChange={(e) => setFormIsPublished(e.target.checked)}
-                    className="w-4 h-4 rounded text-[var(--primary)] focus:ring-0"
-                  />
-                  <label htmlFor="pub-check" className="text-xs font-semibold cursor-pointer">
-                    Publish to Public Catalog immediately
-                  </label>
+                {/* Production Credits & Cast (Per-Anime Authentic Metadata) */}
+                <div className="space-y-3 p-3.5 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-[var(--primary)]" />
+                      <span className="text-[11px] font-bold text-white">
+                        Studio, Author, Director &amp; Voice Cast
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleEnrichCreditsOnly}
+                      disabled={isFetchingCredits}
+                      className="px-2.5 py-1 rounded-lg bg-[var(--primary)]/15 border border-[var(--primary)]/35 text-[10px] font-bold text-[var(--primary)] flex items-center gap-1 hover:bg-[var(--primary)]/25 disabled:opacity-50"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>{isFetchingCredits ? "Fetching..." : "Auto-Enrich from AniList"}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-neutral-300">Animation Studio</label>
+                      <input
+                        type="text"
+                        value={formStudio}
+                        onChange={(e) => setFormStudio(e.target.value)}
+                        placeholder="e.g. ufotable, MAPPA, Studio Pierrot..."
+                        className="w-full h-9 px-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-neutral-300">Author / Original Creator</label>
+                      <input
+                        type="text"
+                        value={formAuthor}
+                        onChange={(e) => setFormAuthor(e.target.value)}
+                        placeholder="e.g. Koyoharu Gotouge..."
+                        className="w-full h-9 px-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-neutral-300">Director</label>
+                      <input
+                        type="text"
+                        value={formDirector}
+                        onChange={(e) => setFormDirector(e.target.value)}
+                        placeholder="e.g. Haruo Sotozaki..."
+                        className="w-full h-9 px-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-neutral-300">Production Company</label>
+                      <input
+                        type="text"
+                        value={formProductionCompany}
+                        onChange={(e) => setFormProductionCompany(e.target.value)}
+                        placeholder="e.g. Aniplex, Shueisha..."
+                        className="w-full h-9 px-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-white focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Per-Anime Cast & Voice Actors Editor */}
+                  <div className="space-y-2 pt-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-[var(--primary)]" />
+                        <span>Characters &amp; Voice Actors ({formCast.length})</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormCast((prev) => [
+                            ...prev,
+                            { characterName: "", voiceActor: "", language: "Japanese", role: "Main" },
+                          ])
+                        }
+                        className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-bold text-white flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Add Cast Member</span>
+                      </button>
+                    </div>
+
+                    {formCast.length > 0 && (
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                        {formCast.map((member, idx) => (
+                          <div key={idx} className="grid grid-cols-12 gap-1.5 items-center">
+                            <input
+                              type="text"
+                              value={member.characterName}
+                              onChange={(e) =>
+                                setFormCast((prev) =>
+                                  prev.map((m, i) => (i === idx ? { ...m, characterName: e.target.value } : m))
+                                )
+                              }
+                              placeholder="Character"
+                              className="col-span-4 h-8 px-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] text-white"
+                            />
+                            <input
+                              type="text"
+                              value={member.voiceActor}
+                              onChange={(e) =>
+                                setFormCast((prev) =>
+                                  prev.map((m, i) => (i === idx ? { ...m, voiceActor: e.target.value } : m))
+                                )
+                              }
+                              placeholder="Voice Actor"
+                              className="col-span-4 h-8 px-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] text-white"
+                            />
+                            <input
+                              type="text"
+                              value={member.language || ""}
+                              onChange={(e) =>
+                                setFormCast((prev) =>
+                                  prev.map((m, i) => (i === idx ? { ...m, language: e.target.value } : m))
+                                )
+                              }
+                              placeholder="Lang"
+                              className="col-span-3 h-8 px-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] text-white"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setFormCast((prev) => prev.filter((_, i) => i !== idx))}
+                              title="Remove cast member"
+                              className="col-span-1 h-8 flex items-center justify-center rounded-lg text-rose-400 hover:bg-rose-500/15"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Published & Trending Switches */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+                    <input
+                      type="checkbox"
+                      id="pub-check"
+                      checked={formIsPublished}
+                      onChange={(e) => setFormIsPublished(e.target.checked)}
+                      className="w-4 h-4 rounded text-[var(--primary)] focus:ring-0"
+                    />
+                    <label htmlFor="pub-check" className="text-xs font-semibold cursor-pointer">
+                      Publish to Public Catalog immediately
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+                    <input
+                      type="checkbox"
+                      id="trending-check"
+                      checked={formTrending}
+                      onChange={(e) => setFormTrending(e.target.checked)}
+                      className="w-4 h-4 rounded text-[var(--primary)] focus:ring-0"
+                    />
+                    <TrendingUp className="w-4 h-4 text-[var(--primary)] shrink-0" />
+                    <label htmlFor="trending-check" className="text-xs font-semibold cursor-pointer">
+                      Feature in Trending Anime shelf
+                    </label>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 pt-2 pb-1">
@@ -3133,31 +3625,67 @@ export const AdminDashboardView: React.FC = () => {
                           );
                         }
                         return (
-                          <div
-                            className={`flex items-center justify-between gap-2 text-[10px] px-2.5 py-1.5 rounded-lg border ${
-                              classifiedPrimary.kind === "vidmoly"
-                                ? "bg-amber-500/10 border-amber-500/25"
-                                : "bg-white/5 border-white/10"
-                            }`}
-                          >
-                            <span className={classifiedPrimary.kind === "vidmoly" ? "text-amber-200" : "text-neutral-300"}>
-                              {classifiedPrimary.kind === "hls"
-                                ? "Bunny Stream / HLS Adaptive Playlist detected — supports automatic quality switching & multi-audio tracks."
-                                : classifiedPrimary.kind === "youtube"
-                                ? "YouTube stream detected — plays via official YouTube IFrame Player."
-                                : classifiedPrimary.kind === "vidmoly"
-                                ? "Vidmoly embed detected — note: Vidmoly sends conflicting X-Frame-Options headers that Chrome/Android block inside iframes (ERR_BLOCKED_BY_RESPONSE). Prefer Bunny Stream (.m3u8), MP4, or YouTube, or keep Vidmoly with a backup quality URL."
-                                : "Direct media stream detected."}
-                            </span>
-                            <span
-                              className={`shrink-0 px-1.5 py-0.5 rounded font-mono font-bold uppercase ${
+                          <div className="space-y-1.5">
+                            <div
+                              className={`flex items-center justify-between gap-2 text-[10px] px-2.5 py-1.5 rounded-lg border ${
                                 classifiedPrimary.kind === "vidmoly"
-                                  ? "bg-amber-500/20 text-amber-300"
-                                  : "bg-emerald-500/20 text-emerald-300"
+                                  ? "bg-amber-500/10 border-amber-500/25"
+                                  : "bg-white/5 border-white/10"
                               }`}
                             >
-                              {classifiedPrimary.kind === "hls" ? "HLS .m3u8" : classifiedPrimary.kind}
-                            </span>
+                              <span className={classifiedPrimary.kind === "vidmoly" ? "text-amber-200" : "text-neutral-300"}>
+                                {classifiedPrimary.kind === "hls"
+                                  ? "Bunny Stream / HLS Adaptive Playlist detected — supports automatic quality switching & multi-audio tracks."
+                                  : classifiedPrimary.kind === "youtube"
+                                  ? "YouTube stream detected — plays via official YouTube IFrame Player."
+                                  : classifiedPrimary.kind === "vidmoly"
+                                  ? "Vidmoly embed detected — note: Vidmoly sends conflicting X-Frame-Options headers that Chrome/Android block inside iframes (ERR_BLOCKED_BY_RESPONSE). Prefer Bunny Stream (.m3u8), MP4, or YouTube, or keep Vidmoly with a backup quality URL."
+                                  : "Direct media stream detected."}
+                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {classifiedPrimary.kind === "hls" && (
+                                  <button
+                                    type="button"
+                                    onClick={handleInspectHlsUrl}
+                                    disabled={hlsInspectState?.loading}
+                                    className="px-2 py-0.5 rounded bg-[var(--primary)]/20 hover:bg-[var(--primary)]/30 text-[var(--primary)] font-bold"
+                                  >
+                                    {hlsInspectState?.loading ? "Inspecting..." : "Inspect Renditions"}
+                                  </button>
+                                )}
+                                <span
+                                  className={`px-1.5 py-0.5 rounded font-mono font-bold uppercase ${
+                                    classifiedPrimary.kind === "vidmoly"
+                                      ? "bg-amber-500/20 text-amber-300"
+                                      : "bg-emerald-500/20 text-emerald-300"
+                                  }`}
+                                >
+                                  {classifiedPrimary.kind === "hls" ? "HLS .m3u8" : classifiedPrimary.kind}
+                                </span>
+                              </div>
+                            </div>
+
+                            {hlsInspectState && !hlsInspectState.loading && (
+                              <div className="p-2 rounded-lg bg-black/40 border border-white/10 text-[10px]">
+                                {hlsInspectState.error ? (
+                                  <span className="text-rose-300">{hlsInspectState.error}</span>
+                                ) : hlsInspectState.variants && hlsInspectState.variants.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5 items-center">
+                                    <span className="text-neutral-400 font-semibold">Manifest Renditions:</span>
+                                    {hlsInspectState.variants.map((v, i) => (
+                                      <span
+                                        key={`${v.resolution}-${i}`}
+                                        className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-200 font-mono"
+                                      >
+                                        {v.label} ({v.resolution}) · {v.bitrateKbps} kbps
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-amber-300">Single rendition / media playlist detected.</span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -3203,6 +3731,34 @@ export const AdminDashboardView: React.FC = () => {
                           />
                         </div>
                       ))}
+                    </div>
+
+                    {/* Release Date & Bunny Video ID */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] text-neutral-300 font-semibold flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-[var(--primary)]" />
+                          <span>Release Date (Optional)</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={newEpReleaseDate}
+                          onChange={(e) => setNewEpReleaseDate(e.target.value)}
+                          className="w-full h-10 px-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-base sm:text-xs text-white"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] text-neutral-300 font-semibold">
+                          Bunny Stream Video ID (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={newEpBunnyVideoId}
+                          onChange={(e) => setNewEpBunnyVideoId(e.target.value)}
+                          placeholder="e.g. a1b2c3d4-xxxx-xxxx-xxxx..."
+                          className="w-full h-10 px-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-base sm:text-xs text-white font-mono"
+                        />
+                      </div>
                     </div>
 
                     {/* Optional Thumbnail URL & Description */}
@@ -3420,6 +3976,20 @@ export const AdminDashboardView: React.FC = () => {
                             </div>
 
                             <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleEpisodePublish(ep)}
+                                title={ep.isPublished !== false ? "Unpublish Episode" : "Publish Episode"}
+                                aria-label={ep.isPublished !== false ? "Unpublish Episode" : "Publish Episode"}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 ${
+                                  ep.isPublished !== false
+                                    ? "bg-emerald-500/15 text-emerald-300"
+                                    : "bg-white/10 text-neutral-400"
+                                }`}
+                              >
+                                {ep.isPublished !== false ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                                <span className="hidden sm:inline">{ep.isPublished !== false ? "Live" : "Draft"}</span>
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => startPlayback(managingAnimeEpisodes, ep)}

@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { Play, Info, ShieldCheck, Clock, Flame, Image as ImageIcon, ListCheck } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { Play, Info, ShieldCheck, Clock, Flame, Image as ImageIcon, ListCheck, Sparkles, TrendingUp } from "lucide-react";
 import { useApp, BackgroundPoster } from "../context/AppContext";
 import {
   dedupeIdList,
@@ -65,6 +65,57 @@ export const HomeView: React.FC = () => {
     }
     return map;
   }, [history]);
+
+  const [selectedGenre, setSelectedGenre] = useState<string>("All");
+
+  const availableGenres = useMemo(() => {
+    const set = new Set<string>();
+    for (const item of catalog) {
+      if (Array.isArray(item.genres)) {
+        for (const g of item.genres) {
+          const clean = String(g || "").trim();
+          if (clean) set.add(clean);
+        }
+      }
+    }
+    return ["All", ...Array.from(set).sort((a, b) => a.localeCompare(b)).slice(0, 12)];
+  }, [catalog]);
+
+  const trendingAnime = useMemo(() => {
+    const explicitlyTrending = catalog.filter((a) => a.trending);
+    if (explicitlyTrending.length > 0) return explicitlyTrending.slice(0, 6);
+    const seen = new Set<string>();
+    return [...catalog]
+      .sort((a, b) => {
+        const aScore = (a.featured ? 10 : 0) + (a.episodesCount || 0) * 0.1 + (a.year || 0) * 0.01;
+        const bScore = (b.featured ? 10 : 0) + (b.episodesCount || 0) * 0.1 + (b.year || 0) * 0.01;
+        return bScore - aScore;
+      })
+      .filter((a) => {
+        if (seen.has(a.id)) return false;
+        seen.add(a.id);
+        return true;
+      })
+      .slice(0, 6);
+  }, [catalog]);
+
+  const recentlyAddedAnime = useMemo(() => {
+    return [...catalog]
+      .sort((a, b) => {
+        const tA = new Date(a.updatedAt || a.createdAt || 0).getTime() || 0;
+        const tB = new Date(b.updatedAt || b.createdAt || 0).getTime() || 0;
+        return tB - tA;
+      })
+      .slice(0, 5);
+  }, [catalog]);
+
+  const filteredCatalog = useMemo(() => {
+    if (selectedGenre === "All") return catalog;
+    const target = selectedGenre.toLowerCase();
+    return catalog.filter((a) =>
+      Array.isArray(a.genres) && a.genres.some((g) => String(g).trim().toLowerCase() === target)
+    );
+  }, [catalog, selectedGenre]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-4 md:py-6 space-y-8 pb-24">
@@ -300,7 +351,96 @@ export const HomeView: React.FC = () => {
         </div>
       )}
 
-      {/* Main Catalog Row */}
+      {/* Trending Now Row */}
+      {trendingAnime.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-[var(--primary)]" />
+              <span>Trending Anime</span>
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            {trendingAnime.map((item, idx) => (
+              <div
+                key={`tr-${item.id}`}
+                onClick={() => navigateTo("details", item.id)}
+                className="group cursor-pointer rounded-2xl overflow-hidden bg-[var(--bg-card)]/95 border border-[var(--border-subtle)] hover:border-[var(--primary)] transition-colors p-2 space-y-2 active:scale-95"
+              >
+                <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-neutral-900">
+                  <img
+                    src={item.posterImage}
+                    alt={item.title}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-[var(--primary)] text-[9px] font-black text-white shadow">
+                    #{idx + 1}
+                  </div>
+                  <div className="absolute top-1.5 right-1.5 yg-dark-surface px-1.5 py-0.5 rounded bg-black/75 text-[9px] font-bold text-white">
+                    {item.rating}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-white truncate group-hover:text-[var(--primary)] transition-colors">
+                    {item.title}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-muted)] truncate">
+                    {item.year} · {item.episodesCount} Ep
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recently Added Row */}
+      {recentlyAddedAnime.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-[var(--primary)]" />
+              <span>Recently Added</span>
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
+            {recentlyAddedAnime.map((item) => (
+              <div
+                key={`recent-${item.id}`}
+                onClick={() => navigateTo("details", item.id)}
+                className="group cursor-pointer rounded-2xl overflow-hidden bg-[var(--bg-card)]/95 border border-[var(--border-subtle)] hover:border-[var(--primary)] transition-colors p-2 space-y-2 active:scale-95"
+              >
+                <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-neutral-900">
+                  <img
+                    src={item.posterImage}
+                    alt={item.title}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute top-1.5 right-1.5 yg-dark-surface px-1.5 py-0.5 rounded bg-black/75 text-[9px] font-bold text-white">
+                    {item.rating}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-white truncate group-hover:text-[var(--primary)] transition-colors">
+                    {item.title}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-muted)] truncate">
+                    {item.status} · {(item.genres || [])[0] || "Anime"}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Main Catalog Row with Genre Filter */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
@@ -316,6 +456,28 @@ export const HomeView: React.FC = () => {
           </button>
         </div>
 
+        {availableGenres.length > 1 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+            {availableGenres.map((genre) => {
+              const active = selectedGenre === genre;
+              return (
+                <button
+                  key={genre}
+                  type="button"
+                  onClick={() => setSelectedGenre(genre)}
+                  className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                    active
+                      ? "bg-[var(--primary)] text-white shadow-sm"
+                      : "bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-white"
+                  }`}
+                >
+                  {genre}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {isLoadingCatalog ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {[1, 2, 3, 4, 5].map((i) => (
@@ -325,18 +487,28 @@ export const HomeView: React.FC = () => {
               />
             ))}
           </div>
-        ) : catalog.length === 0 ? (
+        ) : filteredCatalog.length === 0 ? (
           <div className="p-8 rounded-3xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-center space-y-3">
             <p className="text-sm text-neutral-400">
-              The public catalog is currently empty.
+              {catalog.length === 0
+                ? "The public catalog is currently empty."
+                : `No anime found under "${selectedGenre}".`}
             </p>
-            {isAdmin ? (
+            {catalog.length === 0 && isAdmin ? (
               <button
                 type="button"
                 onClick={() => navigateTo("admin")}
                 className="theme-btn-primary px-5 py-2 rounded-xl text-xs font-bold"
               >
                 Go to Admin Dashboard to Add Anime
+              </button>
+            ) : catalog.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setSelectedGenre("All")}
+                className="px-4 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs font-bold text-white"
+              >
+                Show All Genres
               </button>
             ) : (
               <p className="text-xs text-[var(--text-muted)]">
@@ -346,7 +518,7 @@ export const HomeView: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {catalog.map((anime) => {
+            {filteredCatalog.map((anime) => {
               const savedWatch = activeResumeByAnime.get(anime.id);
               const pct =
                 savedWatch && savedWatch.durationSeconds > 0

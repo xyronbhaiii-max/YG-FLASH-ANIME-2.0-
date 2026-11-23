@@ -84,6 +84,9 @@ export const VideoPlayerModal: React.FC = () => {
   const triedUrlsRef = useRef<Set<string>>(new Set());
   const enteredFsByRotateRef = useRef<boolean>(false);
   const lastUiTimeUpdateRef = useRef<number>(0);
+  const wasInterruptedByOfflineRef = useRef<boolean>(false);
+  const bufferingSinceRef = useRef<number | null>(null);
+  const stallStepDownCountRef = useRef<number>(0);
 
   // Left-side brightness swipe gesture refs (pure in-app software brightness)
   const gestureStartRef = useRef<{
@@ -114,6 +117,7 @@ export const VideoPlayerModal: React.FC = () => {
     h: typeof window !== "undefined" ? window.innerHeight : 720,
   }));
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
+  const [bufferingHint, setBufferingHint] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<{ message: string; code: string } | null>(null);
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
@@ -128,7 +132,7 @@ export const VideoPlayerModal: React.FC = () => {
   const [detectedResolution, setDetectedResolution] = useState<string | null>(null);
   const [detectedDimensions, setDetectedDimensions] = useState<{ w: number; h: number } | null>(null);
   const [hlsLevels, setHlsLevels] = useState<
-    { index: number; height: number; width: number; bitrate: number; label: string }[]
+    { index: number; height: number; width: number; bitrate: number; bitrateKbps: number; label: string }[]
   >([]);
   const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
   const [activeHlsLevel, setActiveHlsLevel] = useState<number>(-1);
@@ -679,22 +683,30 @@ export const VideoPlayerModal: React.FC = () => {
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setStreamError(null);
         const parsedLevels = (hls.levels || [])
-          .map((lvl, idx) => ({
-            index: idx,
-            height: lvl.height || 0,
-            width: lvl.width || 0,
-            bitrate: lvl.bitrate || 0,
-            label:
-              lvl.height > 0
-                ? `${lvl.height}p`
-                : `${Math.max(1, Math.round((lvl.bitrate || 0) / 1000))} kbps`,
-          }))
+          .map((lvl, idx) => {
+            const bw = lvl.bitrate || 0;
+            const bitrateKbps = bw > 0 ? Math.max(1, Math.round(bw / 1000)) : 0;
+            return {
+              index: idx,
+              height: lvl.height || 0,
+              width: lvl.width || 0,
+              bitrate: bw,
+              bitrateKbps,
+              label:
+                lvl.height > 0
+                  ? `${lvl.height}p`
+                  : bitrateKbps > 0
+                  ? `${bitrateKbps} kbps`
+                  : `Level ${idx + 1}`,
+            };
+          })
           .sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
 
         const seenLabels = new Set<string>();
         const uniqueLevels = parsedLevels.filter((lvl) => {
-          if (seenLabels.has(lvl.label)) return false;
-          seenLabels.add(lvl.label);
+          const dedupeKey = lvl.height > 0 ? lvl.label : `${lvl.label}-${lvl.index}`;
+          if (seenLabels.has(dedupeKey)) return false;
+          seenLabels.add(dedupeKey);
           return true;
         });
         setHlsLevels(uniqueLevels);
@@ -712,7 +724,12 @@ export const VideoPlayerModal: React.FC = () => {
 
         syncAudioTracks();
 
-        if (pendingSeekRef.current !== null && !isNaN(pendingSeekRef.current) && pendingSeekRef.current > 0) {
+        if (
+          pendingSeekRef.current !== null &&
+          !isNaN(pendingSeekRef.current) &&
+          pendingSeekRef.current > 0 &&
+          video.readyState >= 1
+        ) {
           video.currentTime = pendingSeekRef.current;
           pendingSeekRef.current = null;
         }
@@ -850,35 +867,98 @@ export const VideoPlayerModal: React.FC = () => {
     }
   }, [playbackSpeed, volume, isMuted, activeStreamUrl, activePlayingEpisode?.id, streamInfo.kind]);
 
-  // Fullscreen & offline-pause listeners
+  // Fullscreen, offline-pause, & auto-resume listeners
   useEffect(() => {
     const handleFsChange = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
     };
     const handleOfflinePause = () => {
+      const videoWasPlaying = Boolean(videoRef.current && !videoRef.current.paused);
+      const ytWasPlaying = Boolean(
+        streamInfo.kind === "youtube" && ytPlayerRef.current && !ytPlayerRef.current.isPaused()
+      );
+      if (videoWasPlaying || ytWasPlaying) {
+        wasInterruptedByOfflineRef.current = true;
+      }
       if (videoRef.current && !videoRef.current.paused) {
         videoRef.current.pause();
       }
       ytPlayerRef.current?.pause();
       setIsPlaying(false);
     };
+    const handleNetworkRestored = () => {
+      if (!wasInterruptedByOfflineRef.current) return;
+      wasInterruptedByOfflineRef.current = false;
+      setStreamError(null);
+      if (streamInfo.kind === "hls" && hlsRef.current) {
+        try {
+          hlsRef.current.startLoad();
+        } catch {}
+      }
+      if (streamInfo.kind === "youtube") {
+        ytPlayerRef.current?.play();
+        setIsPlaying(true);
+      } else if (videoRef.current) {
+        videoRef.current.play().catch(() => {});
+        setIsPlaying(true);
+      }
+    };
     const handleResize = () => {
       setViewportSize({ w: window.innerWidth, h: window.innerHeight });
     };
     document.addEventListener("fullscreenchange", handleFsChange);
     window.addEventListener("yg:offline-pause", handleOfflinePause);
+    window.addEventListener("yg:network-restored", handleNetworkRestored);
     window.addEventListener("resize", handleResize);
     window.addEventListener("orientationchange", handleResize);
     return () => {
       document.removeEventListener("fullscreenchange", handleFsChange);
       window.removeEventListener("yg:offline-pause", handleOfflinePause);
+      window.removeEventListener("yg:network-restored", handleNetworkRestored);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("orientationchange", handleResize);
       try {
         (screen as any).orientation?.unlock?.();
       } catch {}
     };
-  }, []);
+  }, [streamInfo.kind]);
+
+  // Monitor prolonged buffering on slow networks and step down Auto ABR level cleanly
+  useEffect(() => {
+    if (!isBuffering || streamError) {
+      bufferingSinceRef.current = null;
+      setBufferingHint(null);
+      return;
+    }
+    bufferingSinceRef.current = Date.now();
+    const timer = setTimeout(() => {
+      const hls = hlsRef.current;
+      if (
+        hls &&
+        selectedHlsLevel === -1 &&
+        hls.levels &&
+        hls.levels.length > 1 &&
+        stallStepDownCountRef.current < 3
+      ) {
+        const currentLvl = hls.currentLevel >= 0 ? hls.currentLevel : hls.loadLevel;
+        if (typeof currentLvl === "number" && currentLvl > 0) {
+          const lowerLevel = currentLvl - 1;
+          hls.nextLoadLevel = lowerLevel;
+          hls.loadLevel = lowerLevel;
+          stallStepDownCountRef.current += 1;
+          const lowerH = hls.levels[lowerLevel]?.height;
+          setBufferingHint(
+            lowerH ? `Adjusting to ${lowerH}p for slow network...` : "Adjusting quality for slow network..."
+          );
+        } else {
+          setBufferingHint("Slow connection detected, buffering...");
+        }
+      } else {
+        setBufferingHint("Slow connection detected, buffering...");
+      }
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [isBuffering, streamError, selectedHlsLevel]);
 
   // Manage Android StatusBar visibility cleanly in fullscreen / rotated landscape playback
   useEffect(() => {
@@ -1117,6 +1197,10 @@ export const VideoPlayerModal: React.FC = () => {
     if (!videoRef.current) return;
     const curr = videoRef.current.currentTime;
     const dur = videoRef.current.duration || 0;
+    if (!videoRef.current.paused && isBuffering && curr > lastUiTimeUpdateRef.current) {
+      setIsBuffering(false);
+      stallStepDownCountRef.current = 0;
+    }
     if (Math.abs(curr - lastUiTimeUpdateRef.current) >= 0.35 || curr === 0) {
       lastUiTimeUpdateRef.current = curr;
       setCurrentTime(curr);
@@ -1894,15 +1978,23 @@ export const VideoPlayerModal: React.FC = () => {
         </div>
       )}
 
-      {/* Buffering Indicator (spinner only, no buffering text) */}
+      {/* Buffering Indicator */}
       {isBuffering && !streamError && activeStreamUrl && (
         <div
           role="status"
           aria-live="polite"
-          aria-label="Loading stream"
-          className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
+          aria-label="Buffering video stream"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pointer-events-none z-20"
         >
-          <div className="w-14 h-14 rounded-full border-4 border-white/20 border-t-[var(--primary)] animate-spin" />
+          <div className="px-4 py-3 rounded-2xl bg-black/75 backdrop-blur-md border border-white/10 flex flex-col items-center gap-2 shadow-xl">
+            <div className="w-11 h-11 rounded-full border-4 border-white/20 border-t-[var(--primary)] animate-spin" />
+            <span className="text-xs font-bold text-white tracking-wide">Buffering...</span>
+            {bufferingHint && (
+              <span className="text-[10px] font-medium text-amber-300 text-center max-w-[220px]">
+                {bufferingHint}
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -2660,25 +2752,42 @@ export const VideoPlayerModal: React.FC = () => {
                     >
                       Auto (ABR)
                     </button>
-                    {hlsLevels.map((lvl) => (
-                      <button
-                        key={`${lvl.index}-${lvl.label}`}
-                        type="button"
-                        onClick={() => handleHlsLevelChange(lvl.index)}
-                        className={`min-h-[44px] flex-1 min-w-[76px] py-2 px-2.5 rounded-xl text-xs font-bold transition-all ${
-                          selectedHlsLevel === lvl.index
-                            ? "bg-[var(--primary)] text-white shadow-sm"
-                            : "bg-white/5 hover:bg-white/10 text-neutral-300"
-                        }`}
-                      >
-                        {lvl.label}
-                      </button>
-                    ))}
+                    {hlsLevels.map((lvl) => {
+                      const mbpsText =
+                        lvl.bitrateKbps >= 1000
+                          ? `${(lvl.bitrateKbps / 1000).toFixed(1)} Mbps`
+                          : lvl.bitrateKbps > 0
+                          ? `${lvl.bitrateKbps} kbps`
+                          : "";
+                      return (
+                        <button
+                          key={`${lvl.index}-${lvl.label}`}
+                          type="button"
+                          onClick={() => handleHlsLevelChange(lvl.index)}
+                          className={`min-h-[44px] flex-1 min-w-[82px] py-1.5 px-2.5 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center leading-tight ${
+                            selectedHlsLevel === lvl.index
+                              ? "bg-[var(--primary)] text-white shadow-sm"
+                              : "bg-white/5 hover:bg-white/10 text-neutral-300"
+                          }`}
+                        >
+                          <span>{lvl.label}</span>
+                          {mbpsText && (
+                            <span
+                              className={`text-[9px] font-medium mt-0.5 ${
+                                selectedHlsLevel === lvl.index ? "text-white/80" : "text-neutral-400"
+                              }`}
+                            >
+                              {mbpsText}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                   <p className="text-[10px] text-neutral-400">
                     {selectedHlsLevel === -1
-                      ? "Auto switches dynamically across available HLS renditions based on bandwidth."
-                      : "Manual mode locks playback to the chosen HLS rendition."}
+                      ? "Auto switches dynamically across genuine HLS renditions based on bandwidth."
+                      : `Locked to ${hlsLevels.find((l) => l.index === selectedHlsLevel)?.label || "selected"} (${hlsLevels.find((l) => l.index === selectedHlsLevel)?.width || "?"}×${hlsLevels.find((l) => l.index === selectedHlsLevel)?.height || "?"}).`}
                   </p>
                 </div>
               ) : streamInfo.kind === "hls" ? (

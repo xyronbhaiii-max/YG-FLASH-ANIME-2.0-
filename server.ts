@@ -2,6 +2,8 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import dns from "dns";
+import net from "net";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { EventEmitter } from "events";
@@ -101,6 +103,14 @@ const chunkUpload = multer({
 });
 
 // Types
+export interface AnimeCastMember {
+  characterName: string;
+  characterImage?: string;
+  voiceActor: string;
+  language?: string;
+  role?: string;
+}
+
 export interface Anime {
   id: string;
   title: string;
@@ -117,6 +127,12 @@ export interface Anime {
   episodesCount: number;
   isPublished: boolean;
   featured?: boolean;
+  trending?: boolean;
+  studio?: string;
+  author?: string;
+  director?: string;
+  productionCompany?: string;
+  cast?: AnimeCastMember[];
   streamingSources?: { name: string; url: string; quality?: string }[];
   createdAt: string;
   updatedAt: string;
@@ -142,6 +158,8 @@ export interface Episode {
   synopsis?: string;
   description?: string;
   duration?: string;
+  releaseDate?: string;
+  bunnyVideoId?: string;
   videoUrl: string;
   thumbnailUrl?: string;
   order?: number;
@@ -1111,6 +1129,30 @@ app.get("/api/anime/:id", async (req: Request, res: Response) => {
 
 // ==================== ADMIN DASHBOARD ROUTES ====================
 
+function sanitizeCastServer(rawList: unknown): AnimeCastMember[] {
+  if (!Array.isArray(rawList)) return [];
+  const out: AnimeCastMember[] = [];
+  for (const item of rawList) {
+    if (!item || typeof item !== "object") continue;
+    const characterName = String((item as any).characterName || "").trim().slice(0, 160);
+    const voiceActor = String((item as any).voiceActor || "").trim().slice(0, 160);
+    if (!characterName && !voiceActor) continue;
+    let characterImage = String((item as any).characterImage || "").trim().slice(0, 2048);
+    if (characterImage && !/^https?:\/\//i.test(characterImage)) characterImage = "";
+    const language = String((item as any).language || "").trim().slice(0, 64);
+    const role = String((item as any).role || "").trim().slice(0, 64);
+    out.push({
+      characterName: characterName || "Character",
+      voiceActor: voiceActor || "Uncredited",
+      ...(characterImage ? { characterImage } : {}),
+      ...(language ? { language } : {}),
+      ...(role ? { role } : {}),
+    });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
 // Add Anime (Admin only)
 app.post("/api/admin/anime", verifyAdminAuth, (req: Request, res: Response) => {
   try {
@@ -1129,6 +1171,13 @@ app.post("/api/admin/anime", verifyAdminAuth, (req: Request, res: Response) => {
       seasons = 1,
       episodesCount,
       isPublished = true,
+      featured,
+      trending,
+      studio = "",
+      author = "",
+      director = "",
+      productionCompany = "",
+      cast = [],
       streamingSources = [],
     } = req.body;
 
@@ -1154,6 +1203,12 @@ app.post("/api/admin/anime", verifyAdminAuth, (req: Request, res: Response) => {
         quality: normalizeQualityServer(s.quality || s.name),
       }))
       .sort((a, b) => qualityRankServer(b.quality) - qualityRankServer(a.quality));
+
+    const cleanStudio = String(studio || "").trim().slice(0, 200);
+    const cleanAuthor = String(author || "").trim().slice(0, 200);
+    const cleanDirector = String(director || "").trim().slice(0, 200);
+    const cleanProdCompany = String(productionCompany || "").trim().slice(0, 200);
+    const cleanCast = sanitizeCastServer(cast);
 
     // Check if an anime with this exact ID or exact title already exists so different qualities save onto that same anime
     const existingById = typeof id === "string" && id.trim() ? db.anime.find((a) => a.id === id.trim()) : undefined;
@@ -1194,6 +1249,13 @@ app.post("/api/admin/anime", verifyAdminAuth, (req: Request, res: Response) => {
         seasons: parseNonNegativeInt(seasons, existingTarget.seasons || 1, 1, 200),
         episodesCount: resolvedEpCount,
         isPublished: typeof isPublished === "boolean" ? isPublished : existingTarget.isPublished,
+        featured: typeof featured === "boolean" ? featured : existingTarget.featured,
+        trending: typeof trending === "boolean" ? trending : existingTarget.trending,
+        studio: cleanStudio || existingTarget.studio,
+        author: cleanAuthor || existingTarget.author,
+        director: cleanDirector || existingTarget.director,
+        productionCompany: cleanProdCompany || existingTarget.productionCompany,
+        cast: cleanCast.length > 0 ? cleanCast : existingTarget.cast,
         streamingSources: mergedSourcesList,
         updatedAt: new Date().toISOString(),
       };
@@ -1251,6 +1313,13 @@ app.post("/api/admin/anime", verifyAdminAuth, (req: Request, res: Response) => {
       seasons: parseNonNegativeInt(seasons, 1, 1, 200),
       episodesCount: resolvedNewEpCount,
       isPublished: Boolean(isPublished),
+      featured: Boolean(featured),
+      trending: Boolean(trending),
+      ...(cleanStudio ? { studio: cleanStudio } : {}),
+      ...(cleanAuthor ? { author: cleanAuthor } : {}),
+      ...(cleanDirector ? { director: cleanDirector } : {}),
+      ...(cleanProdCompany ? { productionCompany: cleanProdCompany } : {}),
+      ...(cleanCast.length > 0 ? { cast: cleanCast } : {}),
       streamingSources: incomingSources,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1308,6 +1377,19 @@ app.put("/api/admin/anime/:id", verifyAdminAuth, (req: Request, res: Response) =
         }))
         .sort((a, b) => qualityRankServer(b.quality) - qualityRankServer(a.quality));
 
+    const cleanStudio =
+      req.body?.studio !== undefined ? String(req.body.studio || "").trim().slice(0, 200) : undefined;
+    const cleanAuthor =
+      req.body?.author !== undefined ? String(req.body.author || "").trim().slice(0, 200) : undefined;
+    const cleanDirector =
+      req.body?.director !== undefined ? String(req.body.director || "").trim().slice(0, 200) : undefined;
+    const cleanProdCompany =
+      req.body?.productionCompany !== undefined
+        ? String(req.body.productionCompany || "").trim().slice(0, 200)
+        : undefined;
+    const cleanCast =
+      req.body?.cast !== undefined ? sanitizeCastServer(req.body.cast) : undefined;
+
     if (index === -1) {
       // Upsert seamlessly if record was synced from Firebase
       const cleanRating = String(req.body?.rating || "13+").trim().slice(0, 32) || "13+";
@@ -1316,6 +1398,12 @@ app.put("/api/admin/anime/:id", verifyAdminAuth, (req: Request, res: Response) =
         id,
         rating: cleanRating,
         ratingVerified: typeof req.body?.ratingVerified === "boolean" ? req.body.ratingVerified : true,
+        trending: Boolean(req.body?.trending),
+        ...(cleanStudio ? { studio: cleanStudio } : {}),
+        ...(cleanAuthor ? { author: cleanAuthor } : {}),
+        ...(cleanDirector ? { director: cleanDirector } : {}),
+        ...(cleanProdCompany ? { productionCompany: cleanProdCompany } : {}),
+        ...(cleanCast && cleanCast.length > 0 ? { cast: cleanCast } : {}),
         seasons: parseNonNegativeInt(req.body?.seasons, 1, 1, 200),
         episodesCount: parseNonNegativeInt(req.body?.episodesCount, 0, 0, 10000),
         year: parseNonNegativeInt(req.body?.year, new Date().getFullYear(), 1950, 2100),
@@ -1344,6 +1432,14 @@ app.put("/api/admin/anime/:id", verifyAdminAuth, (req: Request, res: Response) =
         typeof req.body?.ratingVerified === "boolean"
           ? req.body.ratingVerified
           : current.ratingVerified,
+      trending:
+        req.body?.trending !== undefined ? Boolean(req.body.trending) : current.trending,
+      studio: cleanStudio !== undefined ? cleanStudio || undefined : current.studio,
+      author: cleanAuthor !== undefined ? cleanAuthor || undefined : current.author,
+      director: cleanDirector !== undefined ? cleanDirector || undefined : current.director,
+      productionCompany:
+        cleanProdCompany !== undefined ? cleanProdCompany || undefined : current.productionCompany,
+      cast: cleanCast !== undefined ? cleanCast : current.cast,
       seasons: parseNonNegativeInt(req.body?.seasons, current.seasons || 1, 1, 200),
       episodesCount: parseNonNegativeInt(req.body?.episodesCount, current.episodesCount ?? 0, 0, 10000),
       year: parseNonNegativeInt(req.body?.year, current.year, 1950, 2100),
@@ -1553,6 +1649,8 @@ function validateAndNormalizeEpisodeInput(
   const rawOrder = raw?.order !== undefined ? Number(raw.order) : defaultOrder;
   const cleanOrder =
     Number.isFinite(rawOrder) && rawOrder >= 0 ? Math.min(100000, Math.round(rawOrder)) : epNum;
+  const cleanReleaseDate = String(raw?.releaseDate || "").trim().slice(0, 40);
+  const cleanBunnyVideoId = String(raw?.bunnyVideoId || "").trim().slice(0, 128);
 
   return {
     normalized: {
@@ -1563,6 +1661,8 @@ function validateAndNormalizeEpisodeInput(
       synopsis: cleanDesc,
       description: cleanDesc,
       duration: cleanDuration,
+      ...(cleanReleaseDate ? { releaseDate: cleanReleaseDate } : {}),
+      ...(cleanBunnyVideoId ? { bunnyVideoId: cleanBunnyVideoId } : {}),
       videoUrl: primaryVideoUrl,
       thumbnailUrl: cleanThumb,
       order: cleanOrder,
@@ -1604,6 +1704,7 @@ app.post("/api/admin/episodes", verifyAdminAuth, (req: Request, res: Response) =
     if (parentAnimeRaw && typeof parentAnimeRaw === "object" && !db.anime.some((a) => a.id === cleanAnimeId)) {
       const pTitle = String(parentAnimeRaw.title || "").trim();
       if (pTitle) {
+        const pCast = sanitizeCastServer(parentAnimeRaw.cast);
         db.anime.unshift({
           id: cleanAnimeId,
           title: pTitle.slice(0, 200),
@@ -1618,6 +1719,15 @@ app.post("/api/admin/episodes", verifyAdminAuth, (req: Request, res: Response) =
           seasons: parseNonNegativeInt(parentAnimeRaw.seasons, 1, 1, 200),
           episodesCount: parseNonNegativeInt(parentAnimeRaw.episodesCount, 0, 0, 10000),
           isPublished: parentAnimeRaw.isPublished !== false,
+          featured: Boolean(parentAnimeRaw.featured),
+          trending: Boolean(parentAnimeRaw.trending),
+          ...(parentAnimeRaw.studio ? { studio: String(parentAnimeRaw.studio).trim().slice(0, 200) } : {}),
+          ...(parentAnimeRaw.author ? { author: String(parentAnimeRaw.author).trim().slice(0, 200) } : {}),
+          ...(parentAnimeRaw.director ? { director: String(parentAnimeRaw.director).trim().slice(0, 200) } : {}),
+          ...(parentAnimeRaw.productionCompany
+            ? { productionCompany: String(parentAnimeRaw.productionCompany).trim().slice(0, 200) }
+            : {}),
+          ...(pCast.length > 0 ? { cast: pCast } : {}),
           streamingSources: Array.isArray(parentAnimeRaw.streamingSources) ? parentAnimeRaw.streamingSources : [],
           createdAt: String(parentAnimeRaw.createdAt || new Date().toISOString()),
           updatedAt: new Date().toISOString(),
@@ -1673,6 +1783,7 @@ app.post("/api/admin/episodes/bulk", verifyAdminAuth, (req: Request, res: Respon
     if (parentAnimeRaw && typeof parentAnimeRaw === "object" && !db.anime.some((a) => a.id === cleanAnimeId)) {
       const pTitle = String(parentAnimeRaw.title || "").trim();
       if (pTitle) {
+        const pCast = sanitizeCastServer(parentAnimeRaw.cast);
         db.anime.unshift({
           id: cleanAnimeId,
           title: pTitle.slice(0, 200),
@@ -1687,6 +1798,15 @@ app.post("/api/admin/episodes/bulk", verifyAdminAuth, (req: Request, res: Respon
           seasons: parseNonNegativeInt(parentAnimeRaw.seasons, 1, 1, 200),
           episodesCount: parseNonNegativeInt(parentAnimeRaw.episodesCount, 0, 0, 10000),
           isPublished: parentAnimeRaw.isPublished !== false,
+          featured: Boolean(parentAnimeRaw.featured),
+          trending: Boolean(parentAnimeRaw.trending),
+          ...(parentAnimeRaw.studio ? { studio: String(parentAnimeRaw.studio).trim().slice(0, 200) } : {}),
+          ...(parentAnimeRaw.author ? { author: String(parentAnimeRaw.author).trim().slice(0, 200) } : {}),
+          ...(parentAnimeRaw.director ? { director: String(parentAnimeRaw.director).trim().slice(0, 200) } : {}),
+          ...(parentAnimeRaw.productionCompany
+            ? { productionCompany: String(parentAnimeRaw.productionCompany).trim().slice(0, 200) }
+            : {}),
+          ...(pCast.length > 0 ? { cast: pCast } : {}),
           streamingSources: Array.isArray(parentAnimeRaw.streamingSources) ? parentAnimeRaw.streamingSources : [],
           createdAt: String(parentAnimeRaw.createdAt || new Date().toISOString()),
           updatedAt: new Date().toISOString(),
@@ -2335,7 +2455,298 @@ app.get("/api/stream/embed-check", async (req: Request, res: Response) => {
 });
 
 
-// ==================== ANILIST METADATA SEARCH ====================
+// ==================== ADMIN PLATFORM STATS & USERS OVERVIEW ====================
+app.get("/api/admin/stats", verifyAdminAuth, (_req: Request, res: Response) => {
+  try {
+    const db = readDatabase();
+    const totalAnime = db.anime.length;
+    const publishedAnime = db.anime.filter((a) => a.isPublished).length;
+    const draftAnime = totalAnime - publishedAnime;
+    const trendingCount = db.anime.filter((a) => Boolean(a.trending)).length;
+    const totalEpisodes = db.episodes.length;
+    const publishedEpisodes = db.episodes.filter((e) => e.isPublished !== false).length;
+    const usersMap = db.userProfiles || {};
+    const totalUsers = Object.keys(usersMap).length;
+    const enrichedAnimeCount = db.anime.filter(
+      (a) => Boolean(a.studio || a.author || a.director || (Array.isArray(a.cast) && a.cast.length > 0))
+    ).length;
+
+    return res.json({
+      success: true,
+      stats: {
+        totalAnime,
+        publishedAnime,
+        draftAnime,
+        trendingCount,
+        enrichedAnimeCount,
+        totalEpisodes,
+        publishedEpisodes,
+        draftEpisodes: totalEpisodes - publishedEpisodes,
+        totalUsers,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Failed to load admin statistics." });
+  }
+});
+
+app.get("/api/admin/users", verifyAdminAuth, (_req: Request, res: Response) => {
+  try {
+    const db = readDatabase();
+    const profiles = Object.values(db.userProfiles || {}).map((p) => ({
+      uid: p.uid,
+      displayName: p.displayName || "Otaku Explorer",
+      themeMode: p.themeMode || "dark",
+      colorTheme: p.colorTheme || "emerald",
+      favoritesCount: Array.isArray(p.favorites) ? p.favorites.length : 0,
+      watchlistCount: Array.isArray(p.watchlist) ? p.watchlist.length : 0,
+      historyCount: Array.isArray(p.watchHistory) ? p.watchHistory.length : 0,
+      createdAt: p.createdAt || null,
+      updatedAt: p.updatedAt || null,
+    }));
+    profiles.sort((a, b) => {
+      const ta = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+      const tb = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+      return tb - ta;
+    });
+    return res.json({
+      success: true,
+      totalUsers: profiles.length,
+      users: profiles,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Failed to load users overview." });
+  }
+});
+
+// ==================== SAFE HLS MASTER PLAYLIST INSPECTOR (SSRF-HARDENED) ====================
+function isDisallowedIpAddress(ip: string): boolean {
+  const normalized = ip.replace(/^::ffff:/i, "");
+  if (net.isIPv4(normalized)) {
+    const parts = normalized.split(".").map((n) => parseInt(n, 10));
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+  if (net.isIPv6(normalized)) {
+    const lower = normalized.toLowerCase();
+    if (
+      lower === "::" ||
+      lower === "::1" ||
+      lower.startsWith("fe80:") ||
+      lower.startsWith("fc") ||
+      lower.startsWith("fd") ||
+      lower.startsWith("ff")
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return true;
+}
+
+export function parseHlsMasterManifestServer(manifestText: string) {
+  const lines = manifestText.split(/\r?\n/).map((l) => l.trim());
+  const renditions: {
+    resolution: string;
+    width: number;
+    height: number;
+    bandwidth: number;
+    bitrateKbps: number;
+    codecs?: string;
+    audio?: string;
+    uri: string;
+  }[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+    const attrs = line.slice("#EXT-X-STREAM-INF:".length);
+    const bwMatch = attrs.match(/(?:AVERAGE-)?BANDWIDTH=(\d+)/i);
+    const resMatch = attrs.match(/RESOLUTION=(\d+)x(\d+)/i);
+    const codecsMatch = attrs.match(/CODECS="([^"]+)"/i);
+    const audioMatch = attrs.match(/AUDIO="([^"]+)"/i);
+
+    let nextUri = "";
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j] && !lines[j].startsWith("#")) {
+        nextUri = lines[j];
+        break;
+      }
+    }
+
+    const width = resMatch ? parseInt(resMatch[1], 10) : 0;
+    const height = resMatch ? parseInt(resMatch[2], 10) : 0;
+    const bandwidth = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+    renditions.push({
+      resolution: height > 0 ? `${height}p` : "Unknown",
+      width,
+      height,
+      bandwidth,
+      bitrateKbps: Math.round(bandwidth / 1000),
+      ...(codecsMatch?.[1] ? { codecs: codecsMatch[1] } : {}),
+      ...(audioMatch?.[1] ? { audio: audioMatch[1] } : {}),
+      uri: nextUri,
+    });
+  }
+
+  renditions.sort((a, b) => b.height - a.height || b.bandwidth - a.bandwidth);
+  return renditions;
+}
+
+app.get("/api/stream/hls-inspect", async (req: Request, res: Response) => {
+  const rawUrl = typeof req.query.url === "string" ? req.query.url.trim() : "";
+  if (!rawUrl || rawUrl.length > 1024) {
+    return res.status(400).json({ error: "Missing or invalid HLS playlist URL." });
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: "Invalid URL format." });
+  }
+
+  if (parsed.protocol !== "https:") {
+    return res.status(400).json({ error: "Only HTTPS HLS playlist URLs can be inspected." });
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (
+    !host ||
+    host === "localhost" ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    net.isIP(host) !== 0
+  ) {
+    return res.status(400).json({ error: "Host is not permitted for remote playlist inspection." });
+  }
+
+  try {
+    const resolved = await dns.promises.lookup(host, { all: true });
+    if (!resolved || resolved.length === 0 || resolved.some((r) => isDisallowedIpAddress(r.address))) {
+      return res.status(400).json({ error: "Blocked private or non-routable playlist host." });
+    }
+  } catch {
+    return res.status(400).json({ error: "Unable to resolve playlist hostname." });
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const resp = await fetch(parsed.toString(), {
+      method: "GET",
+      redirect: "error",
+      signal: ctrl.signal,
+      headers: {
+        Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain",
+      },
+    });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      return res.status(502).json({
+        error: `Playlist server returned HTTP ${resp.status}.`,
+        status: resp.status,
+      });
+    }
+
+    const body = (await resp.text()).slice(0, 262144);
+    if (!body.includes("#EXTM3U")) {
+      return res.status(422).json({ error: "Target URL did not return a valid #EXTM3U playlist." });
+    }
+
+    const renditions = parseHlsMasterManifestServer(body);
+    return res.json({
+      success: true,
+      url: parsed.toString(),
+      isMasterPlaylist: renditions.length > 0,
+      renditionCount: renditions.length,
+      renditions,
+    });
+  } catch (err: any) {
+    clearTimeout(timer);
+    return res.status(502).json({
+      error: err?.name === "AbortError" ? "Timed out fetching HLS manifest." : "Failed to inspect HLS manifest.",
+    });
+  }
+});
+
+// ==================== ANILIST METADATA SEARCH & ENRICHMENT ====================
+function formatAniListMediaResult(m: any) {
+  const studioNodes: string[] = Array.isArray(m?.studios?.nodes)
+    ? m.studios.nodes.map((n: any) => String(n?.name || "").trim()).filter(Boolean)
+    : [];
+  const mainStudios: string[] = Array.isArray(m?.studios?.edges)
+    ? m.studios.edges
+        .filter((e: any) => e?.isMain && e?.node?.name)
+        .map((e: any) => String(e.node.name).trim())
+    : [];
+  const primaryStudio = mainStudios[0] || studioNodes[0] || "";
+  const productionCompany =
+    studioNodes.length > 0 ? Array.from(new Set(studioNodes)).slice(0, 3).join(", ") : primaryStudio;
+
+  const staffEdges: any[] = Array.isArray(m?.staff?.edges) ? m.staff.edges : [];
+  let author = "";
+  let director = "";
+  for (const edge of staffEdges) {
+    const role = String(edge?.role || "").toLowerCase();
+    const name = String(edge?.node?.name?.full || "").trim();
+    if (!name) continue;
+    if (!author && /(original creator|original story|story\s*&\s*art|\bauthor\b)/.test(role)) {
+      author = name;
+    }
+    if (!director && /(\bdirector\b|chief director|series director)/.test(role)) {
+      director = name;
+    }
+  }
+
+  const charEdges: any[] = Array.isArray(m?.characters?.edges) ? m.characters.edges : [];
+  const cast: AnimeCastMember[] = [];
+  for (const edge of charEdges) {
+    const characterName = String(edge?.node?.name?.full || "").trim();
+    if (!characterName) continue;
+    const vas: any[] = Array.isArray(edge?.voiceActors) ? edge.voiceActors : [];
+    const jpVa =
+      vas.find((v) => String(v?.languageV2 || "").toLowerCase() === "japanese") || vas[0];
+    const voiceActor = String(jpVa?.name?.full || "").trim();
+    if (!voiceActor) continue;
+    cast.push({
+      characterName: characterName.slice(0, 160),
+      characterImage: String(edge?.node?.image?.large || edge?.node?.image?.medium || "").slice(0, 2048),
+      voiceActor: voiceActor.slice(0, 160),
+      language: String(jpVa?.languageV2 || "Japanese").slice(0, 64),
+      role: String(edge?.role || "Supporting").slice(0, 64),
+    });
+    if (cast.length >= 12) break;
+  }
+
+  return {
+    aniListId: m.id,
+    title: m.title?.english || m.title?.romaji || "",
+    titleJapanese: m.title?.native || m.title?.romaji || "",
+    synopsis: (m.description || "").replace(/<[^>]*>?/gm, "").trim(),
+    posterImage: m.coverImage?.extraLarge || m.coverImage?.large || "",
+    bannerImage: m.bannerImage || m.coverImage?.extraLarge || "",
+    genres: m.genres || [],
+    year: m.seasonYear || new Date().getFullYear(),
+    episodesCount: typeof m.episodes === "number" && m.episodes >= 0 ? m.episodes : 0,
+    rating: m.isAdult ? "18+" : "13+",
+    status: m.status === "FINISHED" ? "Completed" : "Ongoing",
+    studio: primaryStudio,
+    author,
+    director,
+    productionCompany,
+    cast,
+  };
+}
+
 // Only used for metadata lookup, does NOT import into catalog automatically.
 app.get("/api/anilist/search", async (req: Request, res: Response) => {
   const { q } = req.query;
@@ -2364,6 +2775,34 @@ app.get("/api/anilist/search", async (req: Request, res: Response) => {
           episodes
           status
           isAdult
+          studios {
+            edges {
+              isMain
+              node { name }
+            }
+            nodes { name }
+          }
+          staff(sort: RELEVANCE, perPage: 12) {
+            edges {
+              role
+              node {
+                name { full }
+              }
+            }
+          }
+          characters(sort: [ROLE, RELEVANCE], perPage: 12) {
+            edges {
+              role
+              node {
+                name { full }
+                image { large medium }
+              }
+              voiceActors(sort: RELEVANCE) {
+                name { full }
+                languageV2
+              }
+            }
+          }
         }
       }
     }
@@ -2388,25 +2827,65 @@ app.get("/api/anilist/search", async (req: Request, res: Response) => {
 
     const data = await response.json();
     const media = data?.data?.Page?.media || [];
-
-    const formatted = media.map((m: any) => ({
-      aniListId: m.id,
-      title: m.title?.english || m.title?.romaji || "",
-      titleJapanese: m.title?.native || m.title?.romaji || "",
-      synopsis: (m.description || "").replace(/<[^>]*>?/gm, "").trim(),
-      posterImage: m.coverImage?.extraLarge || m.coverImage?.large || "",
-      bannerImage: m.bannerImage || m.coverImage?.extraLarge || "",
-      genres: m.genres || [],
-      year: m.seasonYear || new Date().getFullYear(),
-      episodesCount: typeof m.episodes === "number" && m.episodes >= 0 ? m.episodes : 0,
-      rating: m.isAdult ? "18+" : "13+",
-      status: m.status === "FINISHED" ? "Completed" : "Ongoing",
-    }));
+    const formatted = media.map(formatAniListMediaResult);
 
     return res.json({ results: formatted });
   } catch (err: any) {
     console.error("AniList search error:", err);
     return res.status(502).json({ error: "Failed to query AniList API.", details: err.message });
+  }
+});
+
+app.get("/api/anilist/details/:id", async (req: Request, res: Response) => {
+  const idNum = parseInt(String(req.params.id || ""), 10);
+  if (!Number.isFinite(idNum) || idNum <= 0) {
+    return res.status(400).json({ error: "Valid positive numeric AniList ID is required." });
+  }
+
+  const query = `
+    query ($id: Int) {
+      Media(id: $id, type: ANIME) {
+        id
+        title { romaji english native }
+        description(asHtml: false)
+        coverImage { extraLarge large }
+        bannerImage
+        genres
+        seasonYear
+        episodes
+        status
+        isAdult
+        studios {
+          edges { isMain node { name } }
+          nodes { name }
+        }
+        staff(sort: RELEVANCE, perPage: 12) {
+          edges { role node { name { full } } }
+        }
+        characters(sort: [ROLE, RELEVANCE], perPage: 12) {
+          edges {
+            role
+            node { name { full } image { large medium } }
+            voiceActors(sort: RELEVANCE) { name { full } languageV2 }
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const response = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query, variables: { id: idNum } }),
+    });
+    if (!response.ok) throw new Error(`AniList returned status ${response.status}`);
+    const data = await response.json();
+    const m = data?.data?.Media;
+    if (!m) return res.status(404).json({ error: "AniList anime not found." });
+    return res.json({ anime: formatAniListMediaResult(m) });
+  } catch (err: any) {
+    return res.status(502).json({ error: "Failed to fetch AniList details.", details: err?.message });
   }
 });
 
