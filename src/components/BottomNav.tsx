@@ -26,10 +26,10 @@ export const BottomNav: React.FC = () => {
               key={item.id}
               type="button"
               onClick={() => navigateTo(item.id)}
-              className="flex flex-col items-center justify-center min-h-[48px] py-1 transition-all active:scale-95"
+              className="flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors duration-100 active:scale-95"
             >
               <div
-                className={`flex items-center justify-center w-9 h-7 rounded-full transition-all ${
+                className={`flex items-center justify-center w-9 h-7 rounded-full transition-colors duration-100 ${
                   isActive
                     ? "text-[var(--primary)]"
                     : "text-[var(--text-muted)] hover:text-white"

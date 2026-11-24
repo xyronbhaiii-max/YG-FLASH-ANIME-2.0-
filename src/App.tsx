@@ -15,6 +15,8 @@ import { VideoPlayerModal } from "./views/VideoPlayerModal";
 import { OfflineWarningModal } from "./components/OfflineWarningModal";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
+const INTRO_SHOWN_SESSION_KEY = "yg_intro_shown_v1";
+
 const MainAppContent: React.FC = () => {
   const {
     currentView,
@@ -25,31 +27,47 @@ const MainAppContent: React.FC = () => {
     clearAccessDeniedMessage,
     navigateTo,
   } = useApp();
-  const [isIntroComplete, setIsIntroComplete] = useState<boolean>(false);
 
-  // 1. Show Cinematic Black-and-White Startup Screen
-  if (!isIntroComplete) {
-    return <IntroScreen onComplete={() => setIsIntroComplete(true)} />;
-  }
+  const [isIntroComplete, setIsIntroComplete] = useState<boolean>(() => {
+    try {
+      if (typeof window !== "undefined") {
+        if (window.location.pathname !== "/" || sessionStorage.getItem(INTRO_SHOWN_SESSION_KEY) === "1") {
+          return true;
+        }
+      }
+    } catch {}
+    return false;
+  });
+
+  const handleIntroComplete = () => {
+    try {
+      sessionStorage.setItem(INTRO_SHOWN_SESSION_KEY, "1");
+    } catch {}
+    setIsIntroComplete(true);
+  };
 
   const showBackdropOnView = ["home", "details", "search", "history"].includes(currentView);
 
   return (
     <div className="min-h-screen text-[var(--text-main)] flex flex-col font-sans relative overflow-x-hidden">
+      {/* Ultra-fast startup overlay while MainAppContent mounts & hydrates immediately underneath */}
+      {!isIntroComplete && <IntroScreen onComplete={handleIntroComplete} />}
+
       {/* Offline Alert System */}
       <OfflineWarningModal />
 
-      {/* High-Quality Anime Background Poster Wallpaper (Visible in Home / Anime Watching Sections) */}
+      {/* High-Quality Anime Background Poster Wallpaper (compositor-clean without full-screen CSS filters) */}
       {backgroundPosterUrl && showBackdropOnView && (
         <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden bg-black">
           <img
             src={backgroundPosterUrl}
             alt="Anime Theme Backdrop"
-            className="w-full h-full object-cover object-center opacity-55 contrast-110 saturate-125 brightness-95 transition-opacity duration-700 ease-in-out scale-[1.01]"
+            decoding="async"
+            className="w-full h-full object-cover object-center opacity-50 transition-opacity duration-300 ease-out"
             referrerPolicy="no-referrer"
           />
-          {/* High-contrast cinematic depth vignette so artwork pops in HD while text stays razor-sharp */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/25 to-black/85" />
+          {/* High-contrast cinematic depth vignette so artwork pops while scrolling stays 60fps */}
+          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-black/85" />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_25%,rgba(0,0,0,0.65)_100%)]" />
         </div>
       )}

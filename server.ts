@@ -80,21 +80,72 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// File Upload config with Multer
+// Strict media & image extension allowlists (prevents .html / .svg / .js upload & stored XSS)
+const SAFE_IMAGE_MIMES: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+const SAFE_MEDIA_UPLOAD_EXTS = new Set([
+  ".jpg", ".jpeg", ".png", ".webp", ".gif",
+  ".mp4", ".mkv", ".webm", ".mov", ".m4v", ".ts", ".avi", ".3gp", ".flv", ".m3u8",
+  ".vtt", ".srt",
+]);
+const SAFE_VIDEO_CHUNK_EXTS = new Set([
+  ".mp4", ".mkv", ".webm", ".mov", ".m4v", ".ts", ".avi", ".3gp", ".flv",
+]);
+
+function isValidAvatarMagicBytes(buf: Buffer, ext: string): boolean {
+  if (!buf || buf.length < 12) return false;
+  if (ext === ".png") {
+    return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  }
+  if (ext === ".jpg") {
+    return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  }
+  if (ext === ".gif") {
+    return buf.subarray(0, 4).toString("ascii") === "GIF8";
+  }
+  if (ext === ".webp") {
+    return (
+      buf.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buf.subarray(8, 12).toString("ascii") === "WEBP"
+    );
+  }
+  return false;
+}
+
+// File Upload config with Multer (admin media uploads)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
     cb(null, UPLOADS_DIR);
   },
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+    const rawExt = path.extname(file.originalname).toLowerCase();
+    const safeExt = SAFE_MEDIA_UPLOAD_EXTS.has(rawExt) ? rawExt : ".bin";
+    const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}`;
+    cb(null, `media-${uniqueSuffix}${safeExt}`);
   },
 });
 
 const upload = multer({
   storage,
   limits: { fileSize: 100 * 1024 * 1024 }, // 100MB max per file
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!SAFE_MEDIA_UPLOAD_EXTS.has(ext)) {
+      return cb(new Error("Unsupported upload file type. Allowed: media, images, and subtitles."));
+    }
+    cb(null, true);
+  },
+});
+
+// Memory-buffered upload for user avatars (validates auth + image bytes before writing to disk)
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
 });
 
 const chunkUpload = multer({
@@ -276,6 +327,7 @@ export interface ServerUserWatchHistoryItem {
 
 export interface ServerUserProfile {
   uid: string;
+  authVerified?: boolean;
   pictureUrl?: string;
   displayName?: string;
   themeMode?: "dark" | "light" | "system";
@@ -536,18 +588,29 @@ async function verifyAdminAuth(req: Request, res: Response, next: NextFunction) 
   next();
 }
 
-// Serve uploaded files with range request support and proper video MIME types
+// Serve uploaded files with range request support, safe MIME allowlist, and nosniff hardening
 app.use("/uploads", express.static(UPLOADS_DIR, {
   setHeaders: (res, filePath) => {
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     const ext = path.extname(filePath).toLowerCase();
     if (ext === ".mkv") res.setHeader("Content-Type", "video/x-matroska");
-    else if (ext === ".mp4") res.setHeader("Content-Type", "video/mp4");
+    else if (ext === ".mp4" || ext === ".m4v") res.setHeader("Content-Type", "video/mp4");
     else if (ext === ".webm") res.setHeader("Content-Type", "video/webm");
     else if (ext === ".mov") res.setHeader("Content-Type", "video/quicktime");
     else if (ext === ".vtt") res.setHeader("Content-Type", "text/vtt; charset=utf-8");
     else if (ext === ".srt") res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    else if (ext === ".m3u8") res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+    else if (ext === ".ts") res.setHeader("Content-Type", "video/mp2t");
+    else if (ext === ".jpg" || ext === ".jpeg") res.setHeader("Content-Type", "image/jpeg");
+    else if (ext === ".png") res.setHeader("Content-Type", "image/png");
+    else if (ext === ".webp") res.setHeader("Content-Type", "image/webp");
+    else if (ext === ".gif") res.setHeader("Content-Type", "image/gif");
+    else {
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Disposition", "attachment");
+    }
   }
 }));
 
@@ -730,19 +793,47 @@ function resolveSafeUserId(raw: unknown, req?: Request): string {
   return clean || "default_user";
 }
 
-async function validateBearerUidIfPresent(
+function isGuestDeviceUid(uid: string): boolean {
+  return (
+    uid === "yg_server_default" ||
+    uid === "default_user" ||
+    /^yg_[a-z0-9]+_[a-z0-9]+$/i.test(uid)
+  );
+}
+
+async function authorizeUserRequest(
   req: Request,
-  targetUid: string
-): Promise<boolean> {
+  targetUid: string,
+  existingProfile?: ServerUserProfile
+): Promise<{ ok: boolean; status: 200 | 401 | 403; verifiedBearer: boolean; error?: string }> {
   const authHeader = String(req.headers.authorization || "");
-  if (!authHeader.toLowerCase().startsWith("bearer ")) {
-    // Allow anonymous device guest UIDs without Bearer token; authenticated UIDs attach Bearer token
-    return true;
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (!token) {
+      return { ok: false, status: 401, verifiedBearer: false, error: "Invalid authorization token." };
+    }
+    const outcome = await verifyFirebaseIdTokenStrict(token);
+    if (!outcome.ok || outcome.decoded.uid !== targetUid) {
+      return {
+        ok: false,
+        status: 403,
+        verifiedBearer: false,
+        error: "User token does not match requested account.",
+      };
+    }
+    return { ok: true, status: 200, verifiedBearer: true };
   }
-  const token = authHeader.slice(7).trim();
-  if (!token) return false;
-  const outcome = await verifyFirebaseIdTokenStrict(token);
-  return Boolean(outcome.ok && outcome.decoded.uid === targetUid);
+
+  // Without a Bearer token, only anonymous device guest UIDs (not linked to Firebase Auth) are allowed
+  if (!isGuestDeviceUid(targetUid) || existingProfile?.authVerified === true) {
+    return {
+      ok: false,
+      status: 401,
+      verifiedBearer: false,
+      error: "Authentication required for signed-in user accounts.",
+    };
+  }
+  return { ok: true, status: 200, verifiedBearer: false };
 }
 
 function sanitizeProfileImageUrl(raw: unknown): string {
@@ -790,19 +881,28 @@ function normalizeServerWatchHistory(
     .slice(0, 30);
 }
 
-app.post("/api/user/profile-picture", upload.single("picture"), async (req: Request, res: Response) => {
+app.post("/api/user/profile-picture", avatarUpload.single("picture"), async (req: Request, res: Response) => {
   try {
     const userId = resolveSafeUserId(req.body?.userId, req);
-    if (!(await validateBearerUidIfPresent(req, userId))) {
-      return res.status(403).json({ error: "User token does not match requested account." });
-    }
-    const { pictureBase64 } = req.body;
     const db = readDatabase();
     if (!db.userProfiles) db.userProfiles = {};
+    const existing = db.userProfiles[userId];
 
+    const authCheck = await authorizeUserRequest(req, userId, existing);
+    if (!authCheck.ok) {
+      return res.status(authCheck.status).json({ error: authCheck.error });
+    }
+
+    const { pictureBase64 } = req.body;
     let pictureUrl = "";
     if (req.file) {
-      pictureUrl = `/uploads/${req.file.filename}`;
+      const ext = SAFE_IMAGE_MIMES[String(req.file.mimetype || "").toLowerCase()];
+      if (!ext || !isValidAvatarMagicBytes(req.file.buffer, ext)) {
+        return res.status(400).json({ error: "Invalid image file. Only PNG, JPEG, WebP, or GIF photos are supported." });
+      }
+      const filename = `avatar-${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
+      await fs.promises.writeFile(path.join(UPLOADS_DIR, filename), req.file.buffer);
+      pictureUrl = `/uploads/${filename}`;
     } else if (pictureBase64 && typeof pictureBase64 === "string") {
       pictureUrl = sanitizeProfileImageUrl(pictureBase64);
       if (!pictureUrl) {
@@ -815,10 +915,10 @@ app.post("/api/user/profile-picture", upload.single("picture"), async (req: Requ
     }
 
     const nowIso = new Date().toISOString();
-    const existing = db.userProfiles[userId];
     db.userProfiles[userId] = {
       ...existing,
       uid: userId,
+      ...(authCheck.verifiedBearer ? { authVerified: true } : {}),
       pictureUrl,
       createdAt: existing?.createdAt || nowIso,
       updatedAt: nowIso,
@@ -833,12 +933,15 @@ app.post("/api/user/profile-picture", upload.single("picture"), async (req: Requ
 
 app.delete("/api/user/profile-picture", async (req: Request, res: Response) => {
   const userId = resolveSafeUserId(req.body?.userId || req.query?.userId, req);
-  if (!(await validateBearerUidIfPresent(req, userId))) {
-    return res.status(403).json({ error: "User token does not match requested account." });
-  }
   const db = readDatabase();
+  const existing = db.userProfiles?.[userId];
+  const authCheck = await authorizeUserRequest(req, userId, existing);
+  if (!authCheck.ok) {
+    return res.status(authCheck.status).json({ error: authCheck.error });
+  }
   if (db.userProfiles && db.userProfiles[userId]) {
     delete db.userProfiles[userId].pictureUrl;
+    if (authCheck.verifiedBearer) db.userProfiles[userId].authVerified = true;
     db.userProfiles[userId].updatedAt = new Date().toISOString();
     writeDatabase(db);
   }
@@ -849,8 +952,12 @@ app.delete("/api/user/profile-picture", async (req: Request, res: Response) => {
 app.post("/api/user/username", async (req: Request, res: Response) => {
   try {
     const userId = resolveSafeUserId(req.body?.userId, req);
-    if (!(await validateBearerUidIfPresent(req, userId))) {
-      return res.status(403).json({ error: "User token does not match requested account." });
+    const db = readDatabase();
+    if (!db.userProfiles) db.userProfiles = {};
+    const existing = db.userProfiles[userId];
+    const authCheck = await authorizeUserRequest(req, userId, existing);
+    if (!authCheck.ok) {
+      return res.status(authCheck.status).json({ error: authCheck.error });
     }
     const { displayName } = req.body;
     if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
@@ -858,12 +965,10 @@ app.post("/api/user/username", async (req: Request, res: Response) => {
     }
     const cleanName = displayName.trim().slice(0, 32);
     const nowIso = new Date().toISOString();
-    const db = readDatabase();
-    if (!db.userProfiles) db.userProfiles = {};
-    const existing = db.userProfiles[userId];
     db.userProfiles[userId] = {
       ...existing,
       uid: userId,
+      ...(authCheck.verifiedBearer ? { authVerified: true } : {}),
       displayName: cleanName,
       createdAt: existing?.createdAt || nowIso,
       updatedAt: nowIso,
@@ -879,17 +984,19 @@ app.post("/api/user/username", async (req: Request, res: Response) => {
 app.post("/api/user/profile", async (req: Request, res: Response) => {
   try {
     const userId = resolveSafeUserId(req.body?.userId || req.body?.uid, req);
-    if (!(await validateBearerUidIfPresent(req, userId))) {
-      return res.status(403).json({ error: "User token does not match requested account." });
-    }
     const db = readDatabase();
     if (!db.userProfiles) db.userProfiles = {};
     const existing = db.userProfiles[userId];
+    const authCheck = await authorizeUserRequest(req, userId, existing);
+    if (!authCheck.ok) {
+      return res.status(authCheck.status).json({ error: authCheck.error });
+    }
     const nowIso = new Date().toISOString();
 
     const nextProfile: ServerUserProfile = {
       ...existing,
       uid: userId,
+      ...(authCheck.verifiedBearer ? { authVerified: true } : {}),
       createdAt: existing?.createdAt || nowIso,
       updatedAt: nowIso,
     };
@@ -947,18 +1054,20 @@ app.post("/api/user/profile", async (req: Request, res: Response) => {
 app.post("/api/user/watch-history", async (req: Request, res: Response) => {
   try {
     const userId = resolveSafeUserId(req.body?.userId || req.body?.uid, req);
-    if (!(await validateBearerUidIfPresent(req, userId))) {
-      return res.status(403).json({ error: "User token does not match requested account." });
+    const db = readDatabase();
+    if (!db.userProfiles) db.userProfiles = {};
+    const existing = db.userProfiles[userId];
+    const authCheck = await authorizeUserRequest(req, userId, existing);
+    if (!authCheck.ok) {
+      return res.status(authCheck.status).json({ error: authCheck.error });
     }
     const item = req.body?.item;
     if (!item || !item.animeId || !item.episodeId) {
       return res.status(400).json({ error: "animeId and episodeId are required." });
     }
-    const db = readDatabase();
-    if (!db.userProfiles) db.userProfiles = {};
-    const existing = db.userProfiles[userId] || { uid: userId };
+    const existingProfile = existing || { uid: userId };
     const nowIso = new Date().toISOString();
-    const prevList = normalizeServerWatchHistory(existing.watchHistory);
+    const prevList = normalizeServerWatchHistory(existingProfile.watchHistory);
     const entry: ServerUserWatchHistoryItem = {
       animeId: String(item.animeId),
       animeTitle: String(item.animeTitle || "Anime").slice(0, 200),
@@ -978,10 +1087,11 @@ app.post("/api/user/watch-history", async (req: Request, res: Response) => {
     ].slice(0, 30);
 
     db.userProfiles[userId] = {
-      ...existing,
+      ...existingProfile,
       uid: userId,
+      ...(authCheck.verifiedBearer ? { authVerified: true } : {}),
       watchHistory: nextHistory,
-      createdAt: existing.createdAt || nowIso,
+      createdAt: existingProfile.createdAt || nowIso,
       updatedAt: nowIso,
     };
     writeDatabase(db);
@@ -993,12 +1103,15 @@ app.post("/api/user/watch-history", async (req: Request, res: Response) => {
 
 app.delete("/api/user/watch-history", async (req: Request, res: Response) => {
   const userId = resolveSafeUserId(req.body?.userId || req.query?.userId, req);
-  if (!(await validateBearerUidIfPresent(req, userId))) {
-    return res.status(403).json({ error: "User token does not match requested account." });
-  }
   const db = readDatabase();
+  const existing = db.userProfiles?.[userId];
+  const authCheck = await authorizeUserRequest(req, userId, existing);
+  if (!authCheck.ok) {
+    return res.status(authCheck.status).json({ error: authCheck.error });
+  }
   if (db.userProfiles && db.userProfiles[userId]) {
     db.userProfiles[userId].watchHistory = [];
+    if (authCheck.verifiedBearer) db.userProfiles[userId].authVerified = true;
     db.userProfiles[userId].updatedAt = new Date().toISOString();
     writeDatabase(db);
   }
@@ -1008,11 +1121,12 @@ app.delete("/api/user/watch-history", async (req: Request, res: Response) => {
 // Retrieve User Profile (automatically normalizes legacy duplicate watchHistory/favorites/watchlist)
 app.get("/api/user/profile", async (req: Request, res: Response) => {
   const userId = resolveSafeUserId(req.query?.userId, req);
-  if (!(await validateBearerUidIfPresent(req, userId))) {
-    return res.status(403).json({ error: "User token does not match requested account." });
-  }
   const db = readDatabase();
   const rawProfile = db.userProfiles?.[userId];
+  const authCheck = await authorizeUserRequest(req, userId, rawProfile);
+  if (!authCheck.ok) {
+    return res.status(authCheck.status).json({ error: authCheck.error });
+  }
   const profile: ServerUserProfile = rawProfile
     ? {
         ...rawProfile,
@@ -1391,24 +1505,40 @@ app.put("/api/admin/anime/:id", verifyAdminAuth, (req: Request, res: Response) =
       req.body?.cast !== undefined ? sanitizeCastServer(req.body.cast) : undefined;
 
     if (index === -1) {
-      // Upsert seamlessly if record was synced from Firebase
+      // Upsert seamlessly if record was synced from Firebase (explicitly whitelist fields)
+      const upsertedTitle = String(req.body?.title || "").trim().slice(0, 200);
+      if (!upsertedTitle) {
+        return res.status(400).json({ error: "Anime title is required." });
+      }
       const cleanRating = String(req.body?.rating || "13+").trim().slice(0, 32) || "13+";
       const upserted: Anime = {
-        ...req.body,
         id,
+        title: upsertedTitle,
+        titleJapanese: String(req.body?.titleJapanese || "").trim().slice(0, 200),
+        synopsis: String(req.body?.synopsis || `Stream ${upsertedTitle} in HD.`).trim().slice(0, 5000),
+        posterImage: String(req.body?.posterImage || "").trim(),
+        bannerImage: String(req.body?.bannerImage || req.body?.posterImage || "").trim(),
+        genres: Array.isArray(req.body?.genres)
+          ? req.body.genres.map((g: unknown) => String(g || "").trim()).filter(Boolean).slice(0, 20)
+          : [],
         rating: cleanRating,
         ratingVerified: typeof req.body?.ratingVerified === "boolean" ? req.body.ratingVerified : true,
+        status: req.body?.status === "Completed" ? "Completed" : "Ongoing",
+        year: parseNonNegativeInt(req.body?.year, new Date().getFullYear(), 1950, 2100),
+        seasons: parseNonNegativeInt(req.body?.seasons, 1, 1, 200),
+        episodesCount: parseNonNegativeInt(req.body?.episodesCount, 0, 0, 10000),
+        isPublished: req.body?.isPublished !== false,
+        featured: Boolean(req.body?.featured),
         trending: Boolean(req.body?.trending),
         ...(cleanStudio ? { studio: cleanStudio } : {}),
         ...(cleanAuthor ? { author: cleanAuthor } : {}),
         ...(cleanDirector ? { director: cleanDirector } : {}),
         ...(cleanProdCompany ? { productionCompany: cleanProdCompany } : {}),
         ...(cleanCast && cleanCast.length > 0 ? { cast: cleanCast } : {}),
-        seasons: parseNonNegativeInt(req.body?.seasons, 1, 1, 200),
-        episodesCount: parseNonNegativeInt(req.body?.episodesCount, 0, 0, 10000),
-        year: parseNonNegativeInt(req.body?.year, new Date().getFullYear(), 1950, 2100),
         streamingSources: normalizeIncomingSources(req.body?.streamingSources),
-        createdAt: req.body?.createdAt || new Date().toISOString(),
+        createdAt: typeof req.body?.createdAt === "string" && req.body.createdAt.trim()
+          ? req.body.createdAt.trim()
+          : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
       db.anime.unshift(upserted);
@@ -1425,8 +1555,34 @@ app.put("/api/admin/anime/:id", verifyAdminAuth, (req: Request, res: Response) =
 
     const updated: Anime = {
       ...current,
-      ...req.body,
       id: current.id, // prevent ID overwrite
+      title:
+        typeof req.body?.title === "string" && req.body.title.trim()
+          ? req.body.title.trim().slice(0, 200)
+          : current.title,
+      titleJapanese:
+        typeof req.body?.titleJapanese === "string"
+          ? req.body.titleJapanese.trim().slice(0, 200)
+          : current.titleJapanese,
+      synopsis:
+        typeof req.body?.synopsis === "string"
+          ? req.body.synopsis.trim().slice(0, 5000)
+          : current.synopsis,
+      posterImage:
+        typeof req.body?.posterImage === "string" ? req.body.posterImage.trim() : current.posterImage,
+      bannerImage:
+        typeof req.body?.bannerImage === "string" ? req.body.bannerImage.trim() : current.bannerImage,
+      genres: Array.isArray(req.body?.genres)
+        ? req.body.genres.map((g: unknown) => String(g || "").trim()).filter(Boolean).slice(0, 20)
+        : current.genres,
+      status:
+        req.body?.status === "Completed" || req.body?.status === "Ongoing"
+          ? req.body.status
+          : current.status,
+      isPublished:
+        typeof req.body?.isPublished === "boolean" ? req.body.isPublished : current.isPublished,
+      featured:
+        typeof req.body?.featured === "boolean" ? req.body.featured : current.featured,
       rating: cleanRating,
       ratingVerified:
         typeof req.body?.ratingVerified === "boolean"
@@ -2082,8 +2238,8 @@ app.post(
         req.body?.filename ||
           (req.headers["x-filename"] ? decodeURIComponent(String(req.headers["x-filename"])) : "video.mp4")
       );
-      const ext = path.extname(rawFilename) || ".mp4";
-      const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, "").slice(0, 10) || ".mp4";
+      const rawExt = (path.extname(rawFilename) || ".mp4").toLowerCase();
+      const safeExt = SAFE_VIDEO_CHUNK_EXTS.has(rawExt) ? rawExt : ".mp4";
 
       if (!uploadId || Number.isNaN(chunkIndex) || Number.isNaN(totalChunks) || totalChunks < 1) {
         return res.status(400).json({ error: "Invalid chunk metadata." });
@@ -2219,8 +2375,8 @@ app.post("/api/upload-chunk/complete", verifyAdminAuth, async (req: Request, res
     const uploadId = String(req.body?.uploadId || "").replace(/[^a-zA-Z0-9_-]/g, "");
     const rawFilename = String(req.body?.filename || "video.mp4");
     const expectedSize = Number(req.body?.expectedSize || 0);
-    const ext = path.extname(rawFilename) || ".mp4";
-    const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, "").slice(0, 10) || ".mp4";
+    const rawExt = (path.extname(rawFilename) || ".mp4").toLowerCase();
+    const safeExt = SAFE_VIDEO_CHUNK_EXTS.has(rawExt) ? rawExt : ".mp4";
 
     if (!uploadId) {
       return res.status(400).json({ error: "Missing uploadId for finalization." });
@@ -2887,6 +3043,14 @@ app.get("/api/anilist/details/:id", async (req: Request, res: Response) => {
   } catch (err: any) {
     return res.status(502).json({ error: "Failed to fetch AniList details.", details: err?.message });
   }
+});
+
+// Clean JSON responses for Multer upload errors (size limit / disallowed extension)
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (err && (err.name === "MulterError" || /Unsupported upload file type/i.test(String(err.message || "")))) {
+    return res.status(400).json({ error: err.message || "Invalid file upload." });
+  }
+  return next(err);
 });
 
 // ==================== VITE & STATIC SERVING ====================

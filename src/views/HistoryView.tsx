@@ -30,7 +30,7 @@ export const HistoryView: React.FC = () => {
             type="button"
             onClick={goBack}
             aria-label="Back to home"
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] text-white active:scale-95 transition-all"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] text-white active:scale-95 transition-colors duration-100"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -46,7 +46,7 @@ export const HistoryView: React.FC = () => {
           <button
             type="button"
             onClick={clearHistory}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 text-xs font-semibold transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 text-xs font-semibold transition-colors duration-100"
           >
             <Trash2 className="w-4 h-4" />
             <span>Clear All</span>
@@ -81,7 +81,7 @@ export const HistoryView: React.FC = () => {
             return (
               <div
                 key={`${item.animeId}-${item.episodeId}`}
-                className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all"
+                className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-colors duration-100"
               >
                 <div className="flex items-center gap-3.5 flex-1 min-w-0">
                   <div className="w-16 h-20 rounded-xl overflow-hidden bg-neutral-900 shrink-0 border border-white/5 relative">

@@ -23,6 +23,7 @@ import { formatAgeRatingLabel, isRestrictedMatureRating } from "../utils/ageRati
 import { normalizeQualityCode, sortSourcesByQuality } from "../utils/videoQuality";
 import { getStreamMimeType, isHlsStreamUrl } from "../utils/streamUrl";
 import { apiUrl, resolveMediaUrl } from "../utils/apiUrl";
+import { cacheAnimeEpisodes, getCachedAnimeEpisodes } from "../utils/episodeCache";
 import { sound } from "../utils/sound";
 
 function formatShortTime(seconds: number): string {
@@ -61,51 +62,80 @@ export const AnimeDetailsView: React.FC = () => {
   const fbEpsRef = useRef<Episode[]>([]);
 
   const syncMergedEpisodes = useCallback(() => {
-    setEpisodes(mergeEpisodeLists(serverEpsRef.current, fbEpsRef.current));
+    const merged = mergeEpisodeLists(serverEpsRef.current, fbEpsRef.current);
+    setEpisodes(merged);
+    if (activeAnimeIdRef.current && merged.length > 0) {
+      cacheAnimeEpisodes(activeAnimeIdRef.current, merged);
+    }
   }, []);
 
   const fetchDetails = useCallback(async (showSpinner = true) => {
     const targetAnimeId = selectedAnimeId;
     if (!targetAnimeId) return;
-    if (showSpinner) setIsLoading(true);
-    try {
+
+    const cachedEps = getCachedAnimeEpisodes(targetAnimeId);
+    if (cachedEps.length > 0 && serverEpsRef.current.length === 0 && fbEpsRef.current.length === 0) {
+      serverEpsRef.current = cachedEps;
+      syncMergedEpisodes();
+      setHasLoadedEpisodes(true);
+      if (showSpinner) setIsLoading(false);
+    } else if (showSpinner) {
+      setIsLoading(true);
+    }
+
+    const markResponded = () => {
+      if (activeAnimeIdRef.current !== targetAnimeId) return;
+      setHasLoadedEpisodes(true);
+      if (showSpinner) setIsLoading(false);
+    };
+
+    const loadServerDetails = async () => {
       const headers: Record<string, string> = {};
       if (isAdmin) {
         const bearerToken = await getValidAdminIdToken(false).catch(() => "");
         if (bearerToken) headers.Authorization = `Bearer ${bearerToken}`;
       }
-
-      const [res, fbOnce] = await Promise.all([
-        fetch(apiUrl(`/api/anime/${targetAnimeId}`), {
+      const ctrl = new AbortController();
+      const timer = window.setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const res = await fetch(apiUrl(`/api/anime/${targetAnimeId}`), {
           headers,
           credentials: "include",
-        }).catch(() => null),
-        fetchAnimeEpisodesOnce(targetAnimeId, isAdmin).catch(() => [] as Episode[]),
-      ]);
-      if (activeAnimeIdRef.current !== targetAnimeId) return;
-
-      if (fbOnce.length > 0 && fbEpsRef.current.length === 0) {
-        fbEpsRef.current = fbOnce;
-      }
-
-      if (res && res.ok) {
-        const data = await res.json();
+          signal: ctrl.signal,
+        });
         if (activeAnimeIdRef.current !== targetAnimeId) return;
-        setAnime(data.anime);
-        serverEpsRef.current = Array.isArray(data.episodes) ? data.episodes : [];
-        if (data.anime?.streamingSources?.[0]?.name) {
-          setSelectedSource(data.anime.streamingSources[0].name);
+        if (res.ok) {
+          const data = await res.json();
+          if (activeAnimeIdRef.current !== targetAnimeId) return;
+          setAnime(data.anime);
+          serverEpsRef.current = Array.isArray(data.episodes) ? data.episodes : [];
+          if (data.anime?.streamingSources?.[0]?.name) {
+            setSelectedSource(data.anime.streamingSources[0].name);
+          }
+          syncMergedEpisodes();
         }
+      } catch {
+      } finally {
+        window.clearTimeout(timer);
+        markResponded();
       }
-      syncMergedEpisodes();
-    } catch (err) {
-      console.error("Failed to load anime details:", err);
-    } finally {
-      if (activeAnimeIdRef.current === targetAnimeId) {
-        setHasLoadedEpisodes(true);
-        if (showSpinner) setIsLoading(false);
+    };
+
+    const loadFirebaseDetails = async () => {
+      try {
+        const fbOnce = await fetchAnimeEpisodesOnce(targetAnimeId, isAdmin);
+        if (activeAnimeIdRef.current !== targetAnimeId) return;
+        if (fbOnce.length > 0 && fbEpsRef.current.length === 0) {
+          fbEpsRef.current = fbOnce;
+          syncMergedEpisodes();
+        }
+      } catch {
+      } finally {
+        markResponded();
       }
-    }
+    };
+
+    await Promise.allSettled([loadServerDetails(), loadFirebaseDetails()]);
   }, [selectedAnimeId, isAdmin, syncMergedEpisodes]);
 
   useEffect(() => {
@@ -127,9 +157,10 @@ export const AnimeDetailsView: React.FC = () => {
 
     serverEpsRef.current = [];
     fbEpsRef.current = [];
-    setEpisodes([]);
-    setHasLoadedEpisodes(false);
-    fetchDetails(true);
+    const instantCached = getCachedAnimeEpisodes(selectedAnimeId);
+    setEpisodes(instantCached);
+    setHasLoadedEpisodes(instantCached.length > 0);
+    fetchDetails(instantCached.length === 0);
 
     const onCatalogUpdated = () => {
       fetchDetails(false);
@@ -145,6 +176,7 @@ export const AnimeDetailsView: React.FC = () => {
           fbEpsRef.current = fbEpisodes;
           syncMergedEpisodes();
           setHasLoadedEpisodes(true);
+          setIsLoading(false);
         }
       }
     );
@@ -428,10 +460,11 @@ export const AnimeDetailsView: React.FC = () => {
           <img
             src={resolveMediaUrl(anime.bannerImage || anime.posterImage)}
             alt={anime.title}
-            className="w-full h-full object-cover filter brightness-60"
+            decoding="async"
+            className="w-full h-full object-cover"
             referrerPolicy="no-referrer"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-[var(--bg-surface)] via-[var(--bg-surface)]/60 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[var(--bg-surface)] via-[var(--bg-surface)]/70 to-black/45" />
         </div>
 
         {/* Content Overlay */}
@@ -549,7 +582,7 @@ export const AnimeDetailsView: React.FC = () => {
                   setSelectedSource(src.name);
                   sound.playClick();
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-100 ${
                   selectedSource === src.name
                     ? "bg-[var(--primary)] text-white shadow-sm"
                     : "bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white"
@@ -609,7 +642,7 @@ export const AnimeDetailsView: React.FC = () => {
                 setSelectedSeasonFilter("ALL");
                 sound.playClick();
               }}
-              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors duration-100 ${
                 selectedSeasonFilter === "ALL"
                   ? "bg-[var(--primary)] text-white shadow-sm"
                   : "bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white"
@@ -625,7 +658,7 @@ export const AnimeDetailsView: React.FC = () => {
                   setSelectedSeasonFilter(sNum);
                   sound.playClick();
                 }}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors duration-100 ${
                   selectedSeasonFilter === sNum
                     ? "bg-[var(--primary)] text-white shadow-sm"
                     : "bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white"
@@ -648,7 +681,7 @@ export const AnimeDetailsView: React.FC = () => {
                 setSelectedLanguageFilter("ALL");
                 sound.playClick();
               }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors duration-100 ${
                 selectedLanguageFilter === "ALL"
                   ? "bg-white/15 text-white border border-white/25"
                   : "bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white"
@@ -664,7 +697,7 @@ export const AnimeDetailsView: React.FC = () => {
                   setSelectedLanguageFilter(lang);
                   sound.playClick();
                 }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors duration-100 ${
                   selectedLanguageFilter === lang
                     ? "bg-[var(--primary)] text-white shadow-sm"
                     : "bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white"

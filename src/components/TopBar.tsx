@@ -27,7 +27,7 @@ export const TopBar: React.FC = () => {
               type="button"
               onClick={goBack}
               aria-label="Back to previous screen"
-              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] text-white active:scale-95 transition-all"
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] text-white active:scale-95 transition-colors duration-100"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -37,7 +37,7 @@ export const TopBar: React.FC = () => {
               onClick={() => navigateTo("home")}
               className="flex items-center gap-2.5 text-left group focus:outline-none"
             >
-              <div className="relative w-9 h-9 rounded-xl ring-1 ring-white/10 group-hover:ring-[var(--primary)] transition-all animate-logo-aura">
+              <div className="relative w-9 h-9 rounded-xl ring-1 ring-white/10 group-hover:ring-[var(--primary)] transition-colors duration-100 animate-logo-aura">
                 <div className="w-full h-full rounded-xl overflow-hidden">
                   <img
                     src={BRAND_LOGO_IMAGE}
@@ -127,7 +127,7 @@ export const TopBar: React.FC = () => {
             type="button"
             onClick={() => navigateTo("more")}
             aria-label="User Profile and Settings"
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl p-0.5 hover:ring-2 hover:ring-[var(--primary)] transition-all"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl p-0.5 hover:ring-2 hover:ring-[var(--primary)] transition-colors duration-100"
           >
             <div className="w-8 h-8 rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
               {profilePicture ? (

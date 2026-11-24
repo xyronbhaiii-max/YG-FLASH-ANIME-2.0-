@@ -249,14 +249,14 @@ html[data-theme="ios"] body {
 
 /* Authentic iPhone Dark Pro Frosted Bars & Grouped Cards */
 html[data-theme="ios"] .glass-panel {
-  background: rgba(20, 20, 22, 0.76);
-  backdrop-filter: blur(28px) saturate(190%);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  background: rgba(20, 20, 22, 0.88);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
   border-color: rgba(255, 255, 255, 0.14);
 }
 
 html[data-mode="light"][data-theme="ios"] .glass-panel {
-  background: rgba(255, 255, 255, 0.84);
+  background: rgba(255, 255, 255, 0.9);
   border-color: rgba(15, 23, 42, 0.12);
 }
 
@@ -296,7 +296,7 @@ input[type=range] {
 
 /* Glassmorphism helpers with solid fallback for older Android 5-8 WebViews */
 .glass-panel {
-  background: rgba(12, 16, 20, 0.94);
+  background: rgba(12, 16, 20, 0.95);
   border: 1px solid var(--border-subtle);
 }
 
@@ -307,22 +307,22 @@ html[data-mode="light"] .glass-panel {
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass-panel {
     background: var(--bg-glass);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
   }
 }
 
 .theme-card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  transition: border-color 0.14s ease, transform 0.12s ease;
+  transition: border-color 0.08s ease, transform 0.08s ease;
 }
 
 .theme-btn-primary {
   background: var(--primary);
   color: #ffffff;
   box-shadow: 0 4px 14px rgba(var(--primary-rgb), 0.3);
-  transition: background-color 0.14s ease, transform 0.1s ease;
+  transition: background-color 0.08s ease, transform 0.08s ease;
 }
 
 @media (hover: hover) and (pointer: fine) {

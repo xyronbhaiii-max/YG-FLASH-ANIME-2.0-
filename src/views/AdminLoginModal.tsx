@@ -69,7 +69,7 @@ export const AdminLoginModal: React.FC = () => {
           type="button"
           onClick={goBack}
           aria-label="Back"
-          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] text-white active:scale-95 transition-all"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--primary)] text-white active:scale-95 transition-colors duration-100"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -129,7 +129,7 @@ export const AdminLoginModal: React.FC = () => {
               <button
                 type="button"
                 onClick={() => navigateTo("home")}
-                className="theme-btn-primary h-11 rounded-xl font-bold text-xs flex items-center justify-center gap-2 active:scale-95 transition-all"
+                className="theme-btn-primary h-11 rounded-xl font-bold text-xs flex items-center justify-center gap-2 active:scale-95 transition-colors duration-100"
               >
                 <Home className="w-4 h-4" />
                 <span>Return to Home</span>
@@ -138,7 +138,7 @@ export const AdminLoginModal: React.FC = () => {
                 type="button"
                 disabled={isLoading}
                 onClick={handleSwitchAccount}
-                className="h-11 rounded-xl bg-[var(--bg-surface)] hover:bg-white/10 border border-[var(--border-subtle)] font-bold text-xs text-white flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+                className="h-11 rounded-xl bg-[var(--bg-surface)] hover:bg-white/10 border border-[var(--border-subtle)] font-bold text-xs text-white flex items-center justify-center gap-2 active:scale-95 transition-colors duration-100 disabled:opacity-50"
               >
                 <LogOut className="w-4 h-4 text-amber-400" />
                 <span>Sign Out & Switch</span>
@@ -158,7 +158,7 @@ export const AdminLoginModal: React.FC = () => {
               type="button"
               disabled={isLoading}
               onClick={handleOwnerGoogleSignIn}
-              className="theme-btn-primary w-full h-12 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg disabled:opacity-50"
+              className="theme-btn-primary w-full h-12 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition-colors duration-100 shadow-lg disabled:opacity-50"
             >
               {isLoading ? (
                 <span className="flex items-center gap-2">

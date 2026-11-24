@@ -41,6 +41,7 @@ import { StatusBar } from "@capacitor/status-bar";
 import { YouTubePlayer, YouTubePlayerHandle } from "../components/YouTubePlayer";
 import { VidmolyPlayer, VidmolyPlayerHandle } from "../components/VidmolyPlayer";
 import { apiUrl, isCapacitorNative, resolveMediaUrl } from "../utils/apiUrl";
+import { cacheAnimeEpisodes, getCachedAnimeEpisodes } from "../utils/episodeCache";
 import { sound } from "../utils/sound";
 
 export const VideoPlayerModal: React.FC = () => {
@@ -117,7 +118,6 @@ export const VideoPlayerModal: React.FC = () => {
     h: typeof window !== "undefined" ? window.innerHeight : 720,
   }));
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
-  const [bufferingHint, setBufferingHint] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<{ message: string; code: string } | null>(null);
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
@@ -271,16 +271,27 @@ export const VideoPlayerModal: React.FC = () => {
 
   // Fetch real episodes & subscribe to live Firebase + SSE updates for Episodes Drawer
   useEffect(() => {
-    setFetchedEpisodes([]);
     if (!activePlayingAnime?.id) {
+      setFetchedEpisodes([]);
       return;
     }
+    const targetAnimeId = activePlayingAnime.id;
     let cancelled = false;
-    let serverEps: Episode[] = [];
+    let serverEps: Episode[] = getCachedAnimeEpisodes(targetAnimeId);
     let fbEps: Episode[] = [];
+    if (serverEps.length > 0) {
+      setFetchedEpisodes(serverEps);
+    } else {
+      setFetchedEpisodes([]);
+    }
+
     const syncEpisodes = () => {
       if (!cancelled) {
-        setFetchedEpisodes(mergeEpisodeLists(serverEps, fbEps));
+        const merged = mergeEpisodeLists(serverEps, fbEps);
+        setFetchedEpisodes(merged);
+        if (merged.length > 0) {
+          cacheAnimeEpisodes(targetAnimeId, merged);
+        }
       }
     };
 
@@ -290,24 +301,34 @@ export const VideoPlayerModal: React.FC = () => {
         const bearerToken = await getValidAdminIdToken(false).catch(() => "");
         if (bearerToken) headers.Authorization = `Bearer ${bearerToken}`;
       }
-      Promise.all([
-        fetch(apiUrl(`/api/anime/${activePlayingAnime.id}`), {
-          headers,
-          credentials: "include",
+
+      const ctrl = new AbortController();
+      const timer = window.setTimeout(() => ctrl.abort(), 4500);
+      fetch(apiUrl(`/api/anime/${targetAnimeId}`), {
+        headers,
+        credentials: "include",
+        signal: ctrl.signal,
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (cancelled) return;
+          if (Array.isArray(data?.episodes)) {
+            serverEps = data.episodes;
+            syncEpisodes();
+          }
         })
-          .then((res) => (res.ok ? res.json() : null))
-          .catch(() => null),
-        fetchAnimeEpisodesOnce(activePlayingAnime.id, isAdmin).catch(() => [] as Episode[]),
-      ]).then(([data, fbOnce]) => {
-        if (cancelled) return;
-        if (Array.isArray(data?.episodes)) {
-          serverEps = data.episodes;
-        }
-        if (fbOnce.length > 0 && fbEps.length === 0) {
-          fbEps = fbOnce;
-        }
-        syncEpisodes();
-      });
+        .catch(() => {})
+        .finally(() => window.clearTimeout(timer));
+
+      fetchAnimeEpisodesOnce(targetAnimeId, isAdmin)
+        .then((fbOnce) => {
+          if (cancelled) return;
+          if (fbOnce.length > 0 && fbEps.length === 0) {
+            fbEps = fbOnce;
+            syncEpisodes();
+          }
+        })
+        .catch(() => {});
     };
 
     void loadAllEpisodes();
@@ -622,19 +643,32 @@ export const VideoPlayerModal: React.FC = () => {
     setStreamError(null);
 
     if (Hls.isSupported()) {
-      const connType: string | undefined = (navigator as any).connection?.effectiveType;
+      const conn = (navigator as any).connection;
+      const connType: string | undefined = conn?.effectiveType;
+      const connDownlinkMbps: number = typeof conn?.downlink === "number" ? conn.downlink : 0;
       const defaultAbrEstimate =
         connType === "slow-2g" || connType === "2g"
           ? 450_000
           : connType === "3g"
-          ? 1_200_000
-          : 3_500_000;
+          ? 1_100_000
+          : connDownlinkMbps > 0
+          ? Math.max(500_000, Math.min(4_500_000, Math.round(connDownlinkMbps * 750_000)))
+          : 1_800_000;
+
+      const resumeStartSec =
+        pendingSeekRef.current !== null &&
+        !isNaN(pendingSeekRef.current) &&
+        pendingSeekRef.current >= 0.5
+          ? pendingSeekRef.current
+          : -1;
 
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
         capLevelToPlayerSize: false,
         startLevel: -1,
+        startPosition: resumeStartSec,
+        startFragPrefetch: true,
         abrEwmaDefaultEstimate: defaultAbrEstimate,
         maxBufferLength: 24,
         maxMaxBufferLength: 60,
@@ -730,7 +764,9 @@ export const VideoPlayerModal: React.FC = () => {
           pendingSeekRef.current > 0 &&
           video.readyState >= 1
         ) {
-          video.currentTime = pendingSeekRef.current;
+          if (Math.abs((video.currentTime || 0) - pendingSeekRef.current) > 1.2) {
+            video.currentTime = pendingSeekRef.current;
+          }
           pendingSeekRef.current = null;
         }
         video.play().catch(() => {});
@@ -923,11 +959,10 @@ export const VideoPlayerModal: React.FC = () => {
     };
   }, [streamInfo.kind]);
 
-  // Monitor prolonged buffering on slow networks and step down Auto ABR level cleanly
+  // Monitor prolonged buffering on slow networks and silently step down Auto ABR level cleanly
   useEffect(() => {
     if (!isBuffering || streamError) {
       bufferingSinceRef.current = null;
-      setBufferingHint(null);
       return;
     }
     bufferingSinceRef.current = Date.now();
@@ -946,17 +981,9 @@ export const VideoPlayerModal: React.FC = () => {
           hls.nextLoadLevel = lowerLevel;
           hls.loadLevel = lowerLevel;
           stallStepDownCountRef.current += 1;
-          const lowerH = hls.levels[lowerLevel]?.height;
-          setBufferingHint(
-            lowerH ? `Adjusting to ${lowerH}p for slow network...` : "Adjusting quality for slow network..."
-          );
-        } else {
-          setBufferingHint("Slow connection detected, buffering...");
         }
-      } else {
-        setBufferingHint("Slow connection detected, buffering...");
       }
-    }, 4500);
+    }, 3500);
     return () => clearTimeout(timer);
   }, [isBuffering, streamError, selectedHlsLevel]);
 
@@ -1727,6 +1754,7 @@ export const VideoPlayerModal: React.FC = () => {
               onTimeUpdate={handleTimeUpdate}
               onWaiting={() => setIsBuffering(true)}
               onStalled={() => setIsBuffering(true)}
+              onLoadedData={() => setIsBuffering(false)}
               onCanPlayThrough={() => setIsBuffering(false)}
               onPlaying={() => {
                 setIsBuffering(false);
@@ -1814,11 +1842,14 @@ export const VideoPlayerModal: React.FC = () => {
                 else if (vh >= 480) setDetectedResolution("480p");
                 else if (vh > 0) setDetectedResolution(`${vh}p`);
 
-                // Seamlessly restore saved watch timestamp OR quality-switch position
+                // Seamlessly restore saved watch timestamp OR quality-switch position without double-seeking
                 if (pendingSeekRef.current !== null && !isNaN(pendingSeekRef.current)) {
                   const targetSec = Math.min(pendingSeekRef.current, video.duration || pendingSeekRef.current);
                   if (targetSec > 0) {
-                    video.currentTime = targetSec;
+                    if (Math.abs((video.currentTime || 0) - targetSec) > 1.2) {
+                      video.currentTime = targetSec;
+                    }
+                    lastUiTimeUpdateRef.current = targetSec;
                     setCurrentTime(targetSec);
                   }
                   pendingSeekRef.current = null;
@@ -1833,7 +1864,9 @@ export const VideoPlayerModal: React.FC = () => {
                 if (!video) return;
                 if (pendingSeekRef.current !== null && !isNaN(pendingSeekRef.current) && pendingSeekRef.current > 0) {
                   const targetSec = Math.min(pendingSeekRef.current, video.duration || pendingSeekRef.current);
-                  video.currentTime = targetSec;
+                  if (Math.abs((video.currentTime || 0) - targetSec) > 1.2) {
+                    video.currentTime = targetSec;
+                  }
                   lastUiTimeUpdateRef.current = targetSec;
                   setCurrentTime(targetSec);
                   pendingSeekRef.current = null;
@@ -1978,23 +2011,15 @@ export const VideoPlayerModal: React.FC = () => {
         </div>
       )}
 
-      {/* Buffering Indicator */}
+      {/* Buffering Indicator (spinner only, zero text) */}
       {isBuffering && !streamError && activeStreamUrl && (
         <div
           role="status"
           aria-live="polite"
-          aria-label="Buffering video stream"
-          className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pointer-events-none z-20"
+          aria-label="Loading video"
+          className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
         >
-          <div className="px-4 py-3 rounded-2xl bg-black/75 backdrop-blur-md border border-white/10 flex flex-col items-center gap-2 shadow-xl">
-            <div className="w-11 h-11 rounded-full border-4 border-white/20 border-t-[var(--primary)] animate-spin" />
-            <span className="text-xs font-bold text-white tracking-wide">Buffering...</span>
-            {bufferingHint && (
-              <span className="text-[10px] font-medium text-amber-300 text-center max-w-[220px]">
-                {bufferingHint}
-              </span>
-            )}
-          </div>
+          <div className="w-11 h-11 rounded-full border-4 border-white/20 border-t-[var(--primary)] animate-spin drop-shadow-lg" />
         </div>
       )}
 
@@ -2264,7 +2289,7 @@ export const VideoPlayerModal: React.FC = () => {
               seekRelative(-10);
             }}
             aria-label="Rewind 10 seconds"
-            className="pointer-events-auto w-14 h-14 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-white active:scale-95 transition-all"
+            className="pointer-events-auto w-14 h-14 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-white active:scale-95 transition-colors duration-100"
           >
             <RotateCcw className="w-6 h-6" />
           </button>
@@ -2276,7 +2301,7 @@ export const VideoPlayerModal: React.FC = () => {
               togglePlay();
             }}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className="pointer-events-auto w-18 h-18 rounded-full bg-[var(--primary)] text-white shadow-[var(--accent-glow)] flex items-center justify-center active:scale-95 transition-all"
+            className="pointer-events-auto w-18 h-18 rounded-full bg-[var(--primary)] text-white shadow-[var(--accent-glow)] flex items-center justify-center active:scale-95 transition-colors duration-100"
           >
             {isPlaying ? (
               <Pause className="w-8 h-8 fill-current" />
@@ -2292,7 +2317,7 @@ export const VideoPlayerModal: React.FC = () => {
               seekRelative(10);
             }}
             aria-label="Forward 10 seconds"
-            className="pointer-events-auto w-14 h-14 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-white active:scale-95 transition-all"
+            className="pointer-events-auto w-14 h-14 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-white active:scale-95 transition-colors duration-100"
           >
             <RotateCw className="w-6 h-6" />
           </button>
@@ -2387,7 +2412,7 @@ export const VideoPlayerModal: React.FC = () => {
                 }}
                 aria-label="Adjust App Brightness"
                 title="In-App Video Brightness (or swipe vertically on left side)"
-                className={`min-h-[38px] px-2.5 rounded-xl flex items-center gap-1.5 border text-xs font-semibold transition-all ${
+                className={`min-h-[38px] px-2.5 rounded-xl flex items-center gap-1.5 border text-xs font-semibold transition-colors duration-100 ${
                   showBrightnessPopover || brightness !== 100
                     ? "bg-amber-500/20 border-amber-400/40 text-amber-300"
                     : "bg-white/5 border-white/10 text-white/80 hover:text-white"
@@ -2457,7 +2482,7 @@ export const VideoPlayerModal: React.FC = () => {
                   resetAutohideTimer();
                 }}
                 aria-label="Playback Speed"
-                className={`min-h-[38px] px-2.5 rounded-lg border text-xs font-mono font-bold flex items-center gap-1 transition-all ${
+                className={`min-h-[38px] px-2.5 rounded-lg border text-xs font-mono font-bold flex items-center gap-1 transition-colors duration-100 ${
                   playbackSpeed !== 1 || showSpeedPopover
                     ? "bg-[var(--primary)]/25 border-[var(--primary)]/50 text-white"
                     : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
@@ -2486,7 +2511,7 @@ export const VideoPlayerModal: React.FC = () => {
                           handleSpeedChange(spd);
                           setShowSpeedPopover(false);
                         }}
-                        className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                        className={`py-1.5 rounded-lg text-[11px] font-bold transition-colors duration-100 ${
                           playbackSpeed === spd
                             ? "bg-[var(--primary)] text-white shadow-sm"
                             : "bg-white/5 hover:bg-white/15 text-neutral-300"
@@ -2541,7 +2566,7 @@ export const VideoPlayerModal: React.FC = () => {
                   ? "See in Horizontal View"
                   : "See in Vertical View"
               }
-              className={`min-h-[40px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all ${
+              className={`min-h-[40px] px-2.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors duration-100 ${
                 orientationMode !== "auto"
                   ? "bg-[var(--primary)]/25 border-[var(--primary)]/50 text-white"
                   : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
@@ -2577,7 +2602,7 @@ export const VideoPlayerModal: React.FC = () => {
         <div
           data-interactive="true"
           onClick={(e) => e.stopPropagation()}
-          className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
+          className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-100"
         >
           <div className="w-full max-w-md max-h-[90%] overflow-y-auto bg-neutral-900 border border-white/15 rounded-3xl p-5 sm:p-6 shadow-2xl text-white space-y-5">
             {/* Dashboard Header */}
@@ -2647,7 +2672,7 @@ export const VideoPlayerModal: React.FC = () => {
                       key={spd}
                       type="button"
                       onClick={() => handleSpeedChange(spd)}
-                      className={`py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      className={`py-1.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                         playbackSpeed === spd
                           ? "bg-[var(--primary)] text-white shadow-sm"
                           : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2726,7 +2751,7 @@ export const VideoPlayerModal: React.FC = () => {
                           key={src.quality}
                           type="button"
                           onClick={() => handleQualityChange(src.quality)}
-                          className={`min-h-[44px] flex-1 min-w-[76px] py-2 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                          className={`min-h-[44px] flex-1 min-w-[76px] py-2 px-2.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                             selectedQuality.toLowerCase() === src.quality.toLowerCase()
                               ? "bg-[var(--primary)] text-white shadow-sm"
                               : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2744,7 +2769,7 @@ export const VideoPlayerModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleHlsLevelChange(-1)}
-                      className={`min-h-[44px] flex-1 min-w-[96px] py-2 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                      className={`min-h-[44px] flex-1 min-w-[96px] py-2 px-2.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                         selectedHlsLevel === -1
                           ? "bg-[var(--primary)] text-white shadow-sm"
                           : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2764,7 +2789,7 @@ export const VideoPlayerModal: React.FC = () => {
                           key={`${lvl.index}-${lvl.label}`}
                           type="button"
                           onClick={() => handleHlsLevelChange(lvl.index)}
-                          className={`min-h-[44px] flex-1 min-w-[82px] py-1.5 px-2.5 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center leading-tight ${
+                          className={`min-h-[44px] flex-1 min-w-[82px] py-1.5 px-2.5 rounded-xl text-xs font-bold transition-colors duration-100 flex flex-col items-center justify-center leading-tight ${
                             selectedHlsLevel === lvl.index
                               ? "bg-[var(--primary)] text-white shadow-sm"
                               : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2806,7 +2831,7 @@ export const VideoPlayerModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleQualityChange("Auto")}
-                      className={`min-h-[44px] flex-1 min-w-[82px] py-2 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                      className={`min-h-[44px] flex-1 min-w-[82px] py-2 px-2.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                         selectedQuality === "Auto"
                           ? "bg-[var(--primary)] text-white shadow-sm"
                           : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2819,7 +2844,7 @@ export const VideoPlayerModal: React.FC = () => {
                         key={src.quality}
                         type="button"
                         onClick={() => handleQualityChange(src.quality)}
-                        className={`min-h-[44px] flex-1 min-w-[76px] py-2 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                        className={`min-h-[44px] flex-1 min-w-[76px] py-2 px-2.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                           selectedQuality.toLowerCase() === src.quality.toLowerCase()
                             ? "bg-[var(--primary)] text-white shadow-sm"
                             : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2861,7 +2886,7 @@ export const VideoPlayerModal: React.FC = () => {
                       key={`${track.index}-${track.name}`}
                       type="button"
                       onClick={() => handleHlsAudioTrackChange(track.index)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                         selectedHlsAudioTrack === track.index
                           ? "bg-[var(--primary)] text-white shadow-sm"
                           : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2892,7 +2917,7 @@ export const VideoPlayerModal: React.FC = () => {
                       key={ver.id}
                       type="button"
                       onClick={() => handleLanguageSwitch(ver)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors duration-100 ${
                         ver.id === activePlayingEpisode.id
                           ? "bg-[var(--primary)] text-white shadow-sm"
                           : "bg-white/5 hover:bg-white/10 text-neutral-300"
@@ -2924,7 +2949,7 @@ export const VideoPlayerModal: React.FC = () => {
                   type="button"
                   aria-pressed={effectiveOrientation === "vertical"}
                   onClick={() => toggleScreenOrientation("vertical")}
-                  className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all active:scale-95 ${
+                  className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors duration-100 active:scale-95 ${
                     effectiveOrientation === "vertical"
                       ? "bg-[var(--primary)] text-white shadow-sm ring-1 ring-white/20"
                       : "text-neutral-300 hover:text-white hover:bg-white/10"
@@ -2937,7 +2962,7 @@ export const VideoPlayerModal: React.FC = () => {
                   type="button"
                   aria-pressed={effectiveOrientation === "horizontal"}
                   onClick={() => toggleScreenOrientation("horizontal")}
-                  className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all active:scale-95 ${
+                  className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors duration-100 active:scale-95 ${
                     effectiveOrientation === "horizontal"
                       ? "bg-[var(--primary)] text-white shadow-sm ring-1 ring-white/20"
                       : "text-neutral-300 hover:text-white hover:bg-white/10"
@@ -3035,7 +3060,7 @@ export const VideoPlayerModal: React.FC = () => {
         <div
           data-interactive="true"
           onClick={(e) => e.stopPropagation()}
-          className="absolute inset-y-0 right-0 z-50 w-80 md:w-96 bg-neutral-950/95 border-l border-white/10 p-6 flex flex-col backdrop-blur-2xl text-white"
+          className="absolute inset-y-0 right-0 z-50 w-80 md:w-96 bg-neutral-950/95 border-l border-white/10 p-6 flex flex-col backdrop-blur-md text-white"
         >
           <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-4">
             <div>
@@ -3084,7 +3109,7 @@ export const VideoPlayerModal: React.FC = () => {
                       startPlayback(activePlayingAnime, epItem);
                       setShowEpisodesDrawer(false);
                     }}
-                    className={`w-full p-3 rounded-xl flex items-center justify-between text-left transition-all ${
+                    className={`w-full p-3 rounded-xl flex items-center justify-between text-left transition-colors duration-100 ${
                       isCurrent
                         ? "bg-[var(--primary)] text-white font-bold shadow-md"
                         : "bg-white/5 hover:bg-white/10 text-neutral-300"

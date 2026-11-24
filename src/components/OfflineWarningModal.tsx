@@ -195,13 +195,13 @@ export const OfflineWarningModal: React.FC = () => {
     // Immediate startup reachability check (non-blocking initial state)
     checkRealConnectivity({ showRestoredToast: false });
 
-    // Adaptive background heartbeat: 4s recovery check while offline, 12s gentle check while online
+    // Adaptive background heartbeat: 4s recovery check while offline, 20s gentle check while online
     let timerId: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
 
     const scheduleNextHeartbeat = () => {
       if (disposed) return;
-      const delay = isOfflineRef.current ? 4000 : 12000;
+      const delay = isOfflineRef.current ? 4000 : 20000;
       timerId = setTimeout(async () => {
         if (disposed) return;
         if (document.visibilityState === "visible") {

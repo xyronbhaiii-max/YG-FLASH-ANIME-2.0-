@@ -259,6 +259,12 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>
         const YT = await loadYouTubeIframeApi();
         if (!iframeSlotRef.current || !slot.contains(mountEl)) return;
 
+        const initialStartSec =
+          typeof latestCallbacksRef.current.initialSeekSeconds === "number" &&
+          latestCallbacksRef.current.initialSeekSeconds >= 1
+            ? Math.floor(latestCallbacksRef.current.initialSeekSeconds)
+            : undefined;
+
         const player = new YT.Player(mountEl, {
           width: "100%",
           height: "100%",
@@ -274,6 +280,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>
             iv_load_policy: 3,
             disablekb: 1,
             fs: 0,
+            start: initialStartSec,
             origin: window.location.origin,
           },
           events: {
@@ -305,7 +312,10 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>
                 );
                 target.setPlaybackRate(closestRate);
                 if (typeof seekSec === "number" && seekSec > 0) {
-                  target.seekTo(seekSec, true);
+                  const cur = target.getCurrentTime?.() || 0;
+                  if (Math.abs(cur - seekSec) > 1.5) {
+                    target.seekTo(seekSec, true);
+                  }
                 }
                 target.playVideo();
               } catch {}

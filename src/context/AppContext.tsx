@@ -48,7 +48,43 @@ import {
   dedupeWatchHistoryByAnime,
   findActiveResumeForAnime,
 } from "../utils/historyDedupe";
+import {
+  cacheAnimeEpisodes,
+  findCachedEpisodeForResume,
+  getCachedAnimeEpisodes,
+  matchResumeEpisode,
+  upsertCachedEpisode,
+} from "../utils/episodeCache";
 import { sound, SoundPack } from "../utils/sound";
+
+const PUBLISHED_CATALOG_CACHE_KEY = "yg_catalog_cache_v1";
+
+function readCachedPublishedCatalog(): Anime[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(PUBLISHED_CATALOG_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((a) => a && typeof a.id === "string" && a.isPublished !== false);
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedPublishedCatalog(items: Anime[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const slim = items
+      .filter((a) => a && a.isPublished)
+      .slice(0, 40)
+      .map((a) => ({
+        ...a,
+        cast: undefined,
+      }));
+    localStorage.setItem(PUBLISHED_CATALOG_CACHE_KEY, JSON.stringify(slim));
+  } catch {}
+}
 
 export type ThemeType = "emerald" | "graphite" | "astral" | "ios";
 export type ThemeMode = "dark" | "light" | "system";
@@ -504,12 +540,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return getValidAdminIdToken(forceRefresh);
   }, []);
 
-  // Catalog
-  const [serverCatalog, setServerCatalog] = useState<Anime[]>([]);
+  // Catalog (hydrate synchronously from published cache for instant 0ms first paint)
+  const initialCachedCatalog = useMemo(() => readCachedPublishedCatalog(), []);
+  const [serverCatalog, setServerCatalog] = useState<Anime[]>(initialCachedCatalog);
   const [firebaseCatalog, setFirebaseCatalog] = useState<Anime[]>([]);
   const [deletedIdsCache, setDeletedIdsCache] = useState<string[]>([]);
-  const [catalog, setCatalog] = useState<Anime[]>([]);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(true);
+  const [catalog, setCatalog] = useState<Anime[]>(() =>
+    initialCachedCatalog.filter((a) => !safeMode || !isRestrictedMatureRating(a.rating))
+  );
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(
+    initialCachedCatalog.length === 0
+  );
   const hasInitialLoadedRef = useRef<boolean>(false);
 
   // History, Favorites & Watchlist (UID-scoped and strictly deduplicated)
@@ -722,20 +763,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           fbUser.emailVerified
       );
 
+      // Unblock standard viewer routes immediately; only hold Admin route guard until owner token verifies
+      if (!isOwnerEmail) {
+        setIsFirebaseAdminAuthenticated(false);
+        setIsServerAdminAuthenticated(false);
+        setAdminUser(null);
+        if (currentViewRef.current === "admin") {
+          setAccessDeniedMessage(
+            `Access Denied: Account "${fbUser.email || "user"}" is not authorized for Admin access. Redirected to Home.`
+          );
+          setCurrentView("home");
+          setViewHistory(["home"]);
+          if (typeof window !== "undefined") {
+            window.history.replaceState({}, "", "/");
+          }
+        }
+        setAuthReady(true);
+      }
+
       let serverConfirmedAdmin = false;
       let serverUserPayload: { email: string; displayName: string } | null = null;
 
       try {
         const firebaseIdToken = await fbUser.getIdToken();
+        const ctrl = new AbortController();
+        const timeoutId = window.setTimeout(() => ctrl.abort(), 4500);
         const res = await fetch(apiUrl("/api/auth/session"), {
           method: "POST",
           credentials: "include",
+          signal: ctrl.signal,
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${firebaseIdToken}`,
           },
           body: JSON.stringify({ idToken: firebaseIdToken }),
-        });
+        }).finally(() => window.clearTimeout(timeoutId));
 
         if (res.ok) {
           const data = await res.json().catch(() => null);
@@ -1371,6 +1433,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCatalog(normalizedList);
 
     if (hasInitialLoadedRef.current) {
+      writeCachedPublishedCatalog(normalizedList);
       const uid = userIdRef.current;
       const isGuest = !authUserRef.current?.uid;
 
@@ -1496,6 +1559,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       es.close();
     };
   }, []);
+
+  // Warm episode cache in background for top 2 resume items so clicking Resume opens player at 0ms
+  const prefetchedResumeIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const topItems = history.slice(0, 2);
+    if (topItems.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      for (const item of topItems) {
+        if (!item?.animeId || prefetchedResumeIdsRef.current.has(item.animeId)) continue;
+        if (getCachedAnimeEpisodes(item.animeId).length > 0) {
+          prefetchedResumeIdsRef.current.add(item.animeId);
+          continue;
+        }
+        prefetchedResumeIdsRef.current.add(item.animeId);
+        fetch(apiUrl(`/api/anime/${item.animeId}`), { credentials: "include" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (Array.isArray(data?.episodes) && data.episodes.length > 0) {
+              cacheAnimeEpisodes(item.animeId, data.episodes);
+            }
+          })
+          .catch(() => {});
+      }
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [history]);
 
   // Watch progress persistence (localStorage + Server UID DB + Firestore watchHistory, strictly 1 entry per animeId)
   const lastRemoteHistoryWriteRef = useRef<number>(0);
@@ -1767,92 +1858,156 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Video playback
   const startPlayback = useCallback((anime: Anime, episode: Episode) => {
+    upsertCachedEpisode(anime.id, episode);
     setActivePlayingAnime(anime);
     setActivePlayingEpisode(episode);
     sound.playClick();
   }, []);
 
+  const resumeInFlightRef = useRef<string | null>(null);
+
   const resumeAnimePlayback = useCallback(
     async (anime: Anime, targetHistory?: HistoryItem) => {
       const saved =
-        targetHistory || findActiveResumeForAnime(historyRef.current, anime.id) || historyRef.current.find((h) => h.animeId === anime.id);
+        targetHistory ||
+        findActiveResumeForAnime(historyRef.current, anime.id) ||
+        historyRef.current.find((h) => h.animeId === anime.id);
       if (!saved) {
         navigateTo("details", anime.id);
         return;
       }
 
-      let resolvedAnime = anime;
-      let serverEpisodes: Episode[] = [];
-      const [apiResult, fbEpisodes] = await Promise.all([
-        fetch(apiUrl(`/api/anime/${anime.id}`), { credentials: "include" })
-          .then(async (res) => (res.ok ? res.json() : null))
-          .catch(() => null),
-        fetchAnimeEpisodesOnce(anime.id, isAdmin).catch(() => [] as Episode[]),
-      ]);
+      // Fast path (0ms): open player immediately using cached episode snapshot;
+      // VideoPlayerModal silently refreshes live episode sources in the background.
+      const cachedMatch = findCachedEpisodeForResume(anime.id, saved);
+      if (cachedMatch) {
+        const ownSources = Array.isArray(cachedMatch.sources)
+          ? cachedMatch.sources.filter((s) => Boolean(s?.url?.trim()))
+          : [];
+        const fallbackUrl = cachedMatch.videoUrl?.trim() || ownSources[0]?.url || "";
+        startPlayback(anime, {
+          ...cachedMatch,
+          videoUrl: fallbackUrl,
+          sources: ownSources,
+        });
+        return;
+      }
 
-      if (apiResult?.anime) resolvedAnime = apiResult.anime;
-      if (Array.isArray(apiResult?.episodes)) serverEpisodes = apiResult.episodes;
+      if (resumeInFlightRef.current === anime.id) return;
+      resumeInFlightRef.current = anime.id;
+      sound.playClick();
 
-      const resolvedEpisodes = mergeEpisodeLists(serverEpisodes, fbEpisodes);
+      const mappedAnimeSourcesFromAnime = (targetAnime: Anime) =>
+        (targetAnime.streamingSources || [])
+          .filter((s) => Boolean(s?.url))
+          .map((s) => ({
+            label: s.name || `${s.quality || "1080p"} Stream`,
+            url: s.url,
+            quality: s.quality || "1080p",
+            type: getStreamMimeType(s.url),
+          }));
 
-      const mappedAnimeSources = (resolvedAnime.streamingSources || [])
-        .filter((s) => Boolean(s?.url))
-        .map((s) => ({
-          label: s.name || `${s.quality || "1080p"} Stream`,
-          url: s.url,
-          quality: s.quality || "1080p",
-          type: getStreamMimeType(s.url),
-        }));
-
-      const targetSeason = saved.season || 1;
-      const matchedEpisode =
-        resolvedEpisodes.find((e) => e.id === saved.episodeId) ||
-        resolvedEpisodes.find(
-          (e) =>
-            e.number === saved.episodeNumber &&
-            (e.season || 1) === targetSeason &&
-            (!saved.language || !e.language || e.language === saved.language)
-        ) ||
-        resolvedEpisodes.find(
-          (e) => e.number === saved.episodeNumber && (e.season || 1) === targetSeason
-        ) ||
-        resolvedEpisodes.find((e) => e.number === saved.episodeNumber);
-
-      if (matchedEpisode) {
-        const ownSources = Array.isArray(matchedEpisode.sources)
-          ? matchedEpisode.sources.filter((s) => Boolean(s?.url?.trim()))
+      const buildMatchedPlayable = (targetAnime: Anime, ep: Episode): Episode => {
+        const mappedAnimeSources = mappedAnimeSourcesFromAnime(targetAnime);
+        const ownSources = Array.isArray(ep.sources)
+          ? ep.sources.filter((s) => Boolean(s?.url?.trim()))
           : [];
         const fallbackUrl =
-          matchedEpisode.videoUrl?.trim() || ownSources[0]?.url || mappedAnimeSources[0]?.url || "";
-        startPlayback(resolvedAnime, {
-          ...matchedEpisode,
+          ep.videoUrl?.trim() || ownSources[0]?.url || mappedAnimeSources[0]?.url || "";
+        return {
+          ...ep,
           videoUrl: fallbackUrl,
           sources: ownSources.length > 0 ? ownSources : mappedAnimeSources,
-        });
-        return;
-      }
+        };
+      };
 
-      // Only synthesize a movie/single fallback if there are zero real episodes and Episode 1 was targeted
-      if (
-        resolvedEpisodes.length === 0 &&
-        (saved.episodeNumber || 1) === 1 &&
-        mappedAnimeSources.length > 0
-      ) {
-        startPlayback(resolvedAnime, {
-          id: saved.episodeId || `ep-${resolvedAnime.id}-1`,
-          animeId: resolvedAnime.id,
-          number: 1,
-          season: targetSeason,
-          title: saved.episodeTitle || resolvedAnime.title || "Episode 1",
-          language: saved.language || "Japanese",
-          videoUrl: mappedAnimeSources[0].url,
-          sources: mappedAnimeSources,
-          createdAt: new Date().toISOString(),
-        });
-        return;
-      }
+      try {
+        const controller = new AbortController();
+        const abortTimer = window.setTimeout(() => controller.abort(), 4500);
 
-      navigateTo("details", resolvedAnime.id);
+        let apiDone = false;
+        let fbDone = false;
+        let resolvedAnime = anime;
+        let serverEpisodes: Episode[] = [];
+        let fbEpisodes: Episode[] = [];
+        let opened = false;
+
+        await new Promise<void>((resolve) => {
+          const tryResolveEarly = () => {
+            if (opened) return;
+            const merged = mergeEpisodeLists(serverEpisodes, fbEpisodes);
+            if (merged.length > 0) {
+              cacheAnimeEpisodes(resolvedAnime.id, merged);
+            }
+            const matched = matchResumeEpisode(merged, saved);
+            if (matched) {
+              opened = true;
+              startPlayback(resolvedAnime, buildMatchedPlayable(resolvedAnime, matched));
+              resolve();
+              return;
+            }
+            if (apiDone && fbDone) {
+              resolve();
+            }
+          };
+
+          fetch(apiUrl(`/api/anime/${anime.id}`), {
+            credentials: "include",
+            signal: controller.signal,
+          })
+            .then(async (res) => (res.ok ? res.json() : null))
+            .then((apiResult) => {
+              if (apiResult?.anime) resolvedAnime = apiResult.anime;
+              if (Array.isArray(apiResult?.episodes)) serverEpisodes = apiResult.episodes;
+            })
+            .catch(() => null)
+            .finally(() => {
+              apiDone = true;
+              window.clearTimeout(abortTimer);
+              tryResolveEarly();
+            });
+
+          fetchAnimeEpisodesOnce(anime.id, isAdmin)
+            .then((eps) => {
+              if (Array.isArray(eps)) fbEpisodes = eps;
+            })
+            .catch(() => [])
+            .finally(() => {
+              fbDone = true;
+              tryResolveEarly();
+            });
+        });
+
+        if (opened) return;
+
+        const mappedAnimeSources = mappedAnimeSourcesFromAnime(resolvedAnime);
+        const resolvedEpisodes = mergeEpisodeLists(serverEpisodes, fbEpisodes);
+
+        if (
+          resolvedEpisodes.length === 0 &&
+          (saved.episodeNumber || 1) === 1 &&
+          mappedAnimeSources.length > 0
+        ) {
+          startPlayback(resolvedAnime, {
+            id: saved.episodeId || `ep-${resolvedAnime.id}-1`,
+            animeId: resolvedAnime.id,
+            number: 1,
+            season: saved.season || 1,
+            title: saved.episodeTitle || resolvedAnime.title || "Episode 1",
+            language: saved.language || "Japanese",
+            videoUrl: mappedAnimeSources[0].url,
+            sources: mappedAnimeSources,
+            createdAt: new Date().toISOString(),
+          });
+          return;
+        }
+
+        navigateTo("details", resolvedAnime.id);
+      } finally {
+        if (resumeInFlightRef.current === anime.id) {
+          resumeInFlightRef.current = null;
+        }
+      }
     },
     [isAdmin, navigateTo, startPlayback]
   );

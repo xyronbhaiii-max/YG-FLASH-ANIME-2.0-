@@ -176,11 +176,12 @@ export const HomeView: React.FC = () => {
             <img
               src={featured.bannerImage || featured.posterImage}
               alt={featured.title}
-              className="w-full h-full object-cover filter brightness-[0.55]"
+              decoding="async"
+              className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#09090b] via-[#09090b]/65 to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-r from-[#09090b] via-transparent to-transparent hidden md:block" />
+            <div className="absolute inset-0 bg-gradient-to-t from-[#09090b] via-[#09090b]/75 to-black/35" />
+            <div className="absolute inset-0 bg-gradient-to-r from-[#09090b] via-[#09090b]/35 to-transparent hidden md:block" />
           </div>
 
           {/* Featured Content Info */}
