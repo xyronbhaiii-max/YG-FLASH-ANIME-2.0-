@@ -62,7 +62,7 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Install NPM Dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: TypeScript Lint Check
         run: npm run lint
