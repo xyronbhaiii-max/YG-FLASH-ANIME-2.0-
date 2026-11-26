@@ -1,16 +1,25 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { RefreshCw, CheckCircle, Radio, Wifi } from "lucide-react";
+import { RefreshCw, CheckCircle, Radio, Wifi, ServerOff, X } from "lucide-react";
 import { Network } from "@capacitor/network";
+import { collection, getDocsFromServer, limit, query } from "firebase/firestore";
+import { firestoreDb } from "../lib/firebase";
 import { sound } from "../utils/sound";
 import { apiUrl, isCapacitorNative } from "../utils/apiUrl";
 import { OFFLINE_GHOST_IMAGE } from "../assets/offlineGhostData";
 
 type OfflineReason = "off" | "no-data" | null;
-type PingResult = "ok" | "timeout" | "fail";
+type ServerProbeStatus =
+  | { state: "ok" }
+  | { state: "http-error"; detail: string }
+  | { state: "timeout"; detail: string }
+  | { state: "network-error"; detail: string };
+type NetProbeStatus = "ok" | "timeout" | "fail";
 
 export const OfflineWarningModal: React.FC = () => {
   const [offlineReason, setOfflineReason] = useState<OfflineReason>(null);
   const [slowNetworkBanner, setSlowNetworkBanner] = useState<boolean>(false);
+  const [serverIssue, setServerIssue] = useState<string | null>(null);
+  const [serverBannerDismissed, setServerBannerDismissed] = useState<boolean>(false);
   const [isChecking, setIsChecking] = useState<boolean>(false);
   const [restoredToast, setRestoredToast] = useState<boolean>(false);
   const wasOfflineRef = useRef<boolean>(false);
@@ -22,7 +31,7 @@ export const OfflineWarningModal: React.FC = () => {
   const isOffline = offlineReason !== null;
   isOfflineRef.current = isOffline;
 
-  // Pause any active playback so users cannot watch cached fragments when net is dead/no recharge
+  // Pause any active playback so users cannot watch cached fragments when device internet is genuinely dead
   const pauseActiveStreams = useCallback(() => {
     try {
       document.querySelectorAll("video").forEach((v) => {
@@ -32,8 +41,28 @@ export const OfflineWarningModal: React.FC = () => {
     } catch {}
   }, []);
 
-  // Single HTTP JSON probe against our own server (distinguishes slow AbortError timeouts from hard failures)
-  const pingServerOnce = useCallback(async (timeoutMs: number): Promise<PingResult> => {
+  // Read OS-level radio/network interface state via Capacitor Network plugin on Android/iOS + navigator.onLine
+  const getDeviceLinkStatus = useCallback(async (): Promise<{
+    connected: boolean;
+    connectionType: string;
+  }> => {
+    if (isCapacitorNative()) {
+      try {
+        const status = await Network.getStatus();
+        return {
+          connected: Boolean(status.connected),
+          connectionType: status.connectionType || "unknown",
+        };
+      } catch {}
+    }
+    return {
+      connected: typeof navigator !== "undefined" ? navigator.onLine : true,
+      connectionType: typeof navigator !== "undefined" && navigator.onLine ? "unknown" : "none",
+    };
+  }, []);
+
+  // Probe Express backend health (/api/ping)
+  const pingServerOnce = useCallback(async (timeoutMs: number): Promise<ServerProbeStatus> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -49,12 +78,95 @@ export const OfflineWarningModal: React.FC = () => {
       });
 
       const contentType = res.headers.get("content-type") || "";
-      if (!res.ok || !contentType.includes("application/json")) {
-        return "fail";
+      if (!res.ok) {
+        return {
+          state: "http-error",
+          detail: `Backend API returned HTTP ${res.status}`,
+        };
+      }
+      if (!contentType.includes("application/json")) {
+        return {
+          state: "http-error",
+          detail: "Backend API returned an unexpected non-JSON response",
+        };
       }
 
       const data = await res.json();
-      return data && data.ok === true ? "ok" : "fail";
+      if (data && data.ok === true) {
+        return { state: "ok" };
+      }
+      return {
+        state: "http-error",
+        detail: "Backend health check did not report ready",
+      };
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        return {
+          state: "timeout",
+          detail: "Backend server timed out",
+        };
+      }
+      return {
+        state: "network-error",
+        detail: "Unable to reach backend server",
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }, []);
+
+  // Real HTTPS + TLS Cloud Firestore server probe (never succeeds offline or behind dead hotspot)
+  const probeFirestoreInternet = useCallback(async (timeoutMs: number): Promise<NetProbeStatus> => {
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const probePromise = getDocsFromServer(
+        query(collection(firestoreDb, "deletedAnime"), limit(1))
+      )
+        .then((): NetProbeStatus => "ok")
+        .catch((err: any): NetProbeStatus => {
+          const code = String(err?.code || "").toLowerCase();
+          const msg = String(err?.message || "").toLowerCase();
+          if (
+            code.includes("unavailable") ||
+            code.includes("deadline-exceeded") ||
+            msg.includes("client is offline") ||
+            msg.includes("network") ||
+            msg.includes("failed to fetch")
+          ) {
+            return "fail";
+          }
+          // Non-network server response still proves active internet connectivity to Google Cloud
+          return "ok";
+        });
+
+      const timeoutPromise = new Promise<NetProbeStatus>((resolve) => {
+        timerId = setTimeout(() => resolve("timeout"), timeoutMs);
+      });
+
+      return await Promise.race([probePromise, timeoutPromise]);
+    } catch {
+      return "fail";
+    } finally {
+      if (timerId !== undefined) clearTimeout(timerId);
+    }
+  }, []);
+
+  // Fast public HTTPS 204 probe (distinguishes captive/no-data vs real route; opaque redirect = captive/blocked)
+  const probePublicInternet = useCallback(async (timeoutMs: number): Promise<NetProbeStatus> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`https://clients3.google.com/generate_204?t=${Date.now()}`, {
+        method: "GET",
+        mode: "no-cors",
+        redirect: "manual",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (res.type === "opaqueredirect") {
+        return "fail";
+      }
+      return "ok";
     } catch (err: any) {
       if (err?.name === "AbortError") {
         return "timeout";
@@ -65,10 +177,16 @@ export const OfflineWarningModal: React.FC = () => {
     }
   }, []);
 
-  // Active live internet reachability probe (keeps slow mobile data streaming with buffering notice instead of false lockout)
+  // Multi-layer check: (1) Device interface status -> (2) Backend /api/ping -> (3) Cloud Firestore / Public internet probe
   const checkRealConnectivity = useCallback(
-    async (options?: { showRestoredToast?: boolean; immediateOnFail?: boolean }): Promise<boolean> => {
-      if (isCheckingRef.current) return !wasOfflineRef.current;
+    async (options?: {
+      showRestoredToast?: boolean;
+      immediateOnFail?: boolean;
+      isManualRetry?: boolean;
+    }): Promise<boolean> => {
+      if (isCheckingRef.current && !options?.isManualRetry) {
+        return !wasOfflineRef.current;
+      }
       isCheckingRef.current = true;
 
       try {
@@ -76,10 +194,19 @@ export const OfflineWarningModal: React.FC = () => {
           return true;
         }
 
-        const timeoutMs = !navigator.onLine ? 2500 : isUploadingRef.current ? 12000 : 8000;
-        const firstTry = await pingServerOnce(timeoutMs);
+        const link = await getDeviceLinkStatus();
+        if (!link.connected) {
+          setSlowNetworkBanner(false);
+          setServerIssue(null);
+          if (!wasOfflineRef.current) sound.playError();
+          wasOfflineRef.current = true;
+          setOfflineReason("off");
+          pauseActiveStreams();
+          return false;
+        }
 
-        if (firstTry === "ok") {
+        const timeoutMs = isUploadingRef.current ? 12000 : 6500;
+        const markDeviceOnline = () => {
           setSlowNetworkBanner(false);
           if (wasOfflineRef.current) {
             wasOfflineRef.current = false;
@@ -93,41 +220,92 @@ export const OfflineWarningModal: React.FC = () => {
           } else {
             setOfflineReason(null);
           }
+        };
+
+        // Fast path: backend Express /api/ping is reachable & healthy
+        const firstServerTry = await pingServerOnce(timeoutMs);
+        if (firstServerTry.state === "ok") {
+          setServerIssue(null);
+          setServerBannerDismissed(false);
+          markDeviceOnline();
           return true;
         }
 
-        // If browser says online and probe simply timed out on slow 2G/3G, allow streaming & show buffering banner
-        if (firstTry === "timeout" && navigator.onLine && !isOfflineRef.current) {
+        // Backend did not return ok — check live device internet reachability via Cloud Firestore & public HTTPS
+        const [firestoreResult, publicResult] = await Promise.all([
+          probeFirestoreInternet(5500),
+          probePublicInternet(4500),
+        ]);
+
+        // Device IS online (Firebase reachable OR public HTTPS reachable with live link)
+        if (firestoreResult === "ok" || (publicResult === "ok" && firestoreResult !== "fail")) {
+          markDeviceOnline();
+          setServerIssue(firstServerTry.detail);
+          if (options?.isManualRetry) {
+            setServerBannerDismissed(false);
+          }
+          return true;
+        }
+
+        // Slow network (timeouts while already online) -> show non-blocking slow network banner
+        if (
+          (firstServerTry.state === "timeout" ||
+            firestoreResult === "timeout" ||
+            publicResult === "timeout") &&
+          link.connected &&
+          !isOfflineRef.current &&
+          !options?.isManualRetry
+        ) {
           wasOfflineRef.current = false;
           setOfflineReason(null);
           setSlowNetworkBanner(true);
           return true;
         }
 
+        // Optional quick confirmation retry on automatic checks before declaring genuine no-data offline
         if (!options?.immediateOnFail) {
-          await new Promise((r) => setTimeout(r, 900));
+          await new Promise((r) => setTimeout(r, 850));
           if (isUploadingRef.current && Date.now() - lastUploadPulseRef.current < 15000) {
             return true;
           }
-          const secondTry = await pingServerOnce(timeoutMs);
-          if (secondTry === "ok") {
+
+          const retryLink = await getDeviceLinkStatus();
+          if (!retryLink.connected) {
             setSlowNetworkBanner(false);
-            if (wasOfflineRef.current) {
-              wasOfflineRef.current = false;
-              setOfflineReason(null);
-              window.dispatchEvent(new CustomEvent("yg:network-restored"));
-              if (options?.showRestoredToast !== false) {
-                sound.playSuccess();
-                setRestoredToast(true);
-                setTimeout(() => setRestoredToast(false), 3200);
-              }
-            } else {
-              setOfflineReason(null);
-            }
+            setServerIssue(null);
+            if (!wasOfflineRef.current) sound.playError();
+            wasOfflineRef.current = true;
+            setOfflineReason("off");
+            pauseActiveStreams();
+            return false;
+          }
+
+          const secondServerTry = await pingServerOnce(timeoutMs);
+          if (secondServerTry.state === "ok") {
+            setServerIssue(null);
+            setServerBannerDismissed(false);
+            markDeviceOnline();
             return true;
           }
 
-          if (secondTry === "timeout" && navigator.onLine && !isOfflineRef.current) {
+          const [retryFirestore, retryPublic] = await Promise.all([
+            probeFirestoreInternet(5500),
+            probePublicInternet(4500),
+          ]);
+
+          if (retryFirestore === "ok" || (retryPublic === "ok" && retryFirestore !== "fail")) {
+            markDeviceOnline();
+            setServerIssue(secondServerTry.detail);
+            return true;
+          }
+
+          if (
+            (secondServerTry.state === "timeout" ||
+              retryFirestore === "timeout" ||
+              retryPublic === "timeout") &&
+            retryLink.connected &&
+            !isOfflineRef.current
+          ) {
             wasOfflineRef.current = false;
             setOfflineReason(null);
             setSlowNetworkBanner(true);
@@ -135,9 +313,11 @@ export const OfflineWarningModal: React.FC = () => {
           }
         }
 
-        // Genuine offline state or dead/no-data connection
-        const nextReason: OfflineReason = navigator.onLine ? "no-data" : "off";
+        // Genuine offline state: both device probes & backend failed
+        const finalLink = await getDeviceLinkStatus();
+        const nextReason: OfflineReason = finalLink.connected ? "no-data" : "off";
         setSlowNetworkBanner(false);
+        setServerIssue(null);
         if (!wasOfflineRef.current) sound.playError();
         wasOfflineRef.current = true;
         setOfflineReason(nextReason);
@@ -147,7 +327,13 @@ export const OfflineWarningModal: React.FC = () => {
         isCheckingRef.current = false;
       }
     },
-    [pauseActiveStreams, pingServerOnce]
+    [
+      getDeviceLinkStatus,
+      pauseActiveStreams,
+      pingServerOnce,
+      probeFirestoreInternet,
+      probePublicInternet,
+    ]
   );
 
   useEffect(() => {
@@ -156,7 +342,6 @@ export const OfflineWarningModal: React.FC = () => {
     };
 
     const handleOffline = () => {
-      // Confirm with a fast ping so WebView quirks don't falsely lock the app when data still works
       checkRealConnectivity({ showRestoredToast: true });
     };
 
@@ -192,16 +377,16 @@ export const OfflineWarningModal: React.FC = () => {
       conn.addEventListener("change", handleOnline);
     }
 
-    // Immediate startup reachability check (non-blocking initial state)
+    // Immediate startup reachability check
     checkRealConnectivity({ showRestoredToast: false });
 
-    // Adaptive background heartbeat: 4s recovery check while offline, 20s gentle check while online
+    // Adaptive background heartbeat: 4s recovery check while offline, 25s gentle check while online
     let timerId: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
 
     const scheduleNextHeartbeat = () => {
       if (disposed) return;
-      const delay = isOfflineRef.current ? 4000 : 20000;
+      const delay = isOfflineRef.current ? 4000 : 25000;
       timerId = setTimeout(async () => {
         if (disposed) return;
         if (document.visibilityState === "visible") {
@@ -247,11 +432,15 @@ export const OfflineWarningModal: React.FC = () => {
   const handleManualCheck = async () => {
     setIsChecking(true);
     sound.playClick();
-    const ok = await checkRealConnectivity({ showRestoredToast: true, immediateOnFail: true });
+    const ok = await checkRealConnectivity({
+      showRestoredToast: true,
+      immediateOnFail: true,
+      isManualRetry: true,
+    });
     if (!ok) {
       sound.playError();
     }
-    setTimeout(() => setIsChecking(false), 500);
+    setTimeout(() => setIsChecking(false), 400);
   };
 
   // Toast notification when connection returns
@@ -260,6 +449,44 @@ export const OfflineWarningModal: React.FC = () => {
       <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] px-4 py-2.5 rounded-2xl bg-emerald-950/90 border border-emerald-500/50 shadow-2xl flex items-center gap-2.5 text-xs font-bold text-white backdrop-blur-md">
         <CheckCircle className="w-4 h-4 text-emerald-400" />
         <span>Back Online! High-Speed Streaming Restored.</span>
+      </div>
+    );
+  }
+
+  // Non-blocking notice when device IS online, but the Express backend server is unreachable
+  if (serverIssue && !serverBannerDismissed && !isOffline) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="fixed top-3 left-1/2 -translate-x-1/2 z-[9998] px-3.5 py-2.5 rounded-2xl bg-amber-950/95 border border-amber-500/45 shadow-2xl flex items-center gap-2.5 text-[11px] sm:text-xs text-amber-100 max-w-[94vw] backdrop-blur-md"
+      >
+        <ServerOff className="w-4 h-4 text-amber-400 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="font-bold text-amber-200 leading-tight truncate">
+            Server Connection Unavailable
+          </p>
+          <p className="text-[10px] text-amber-200/80 leading-tight truncate">
+            {serverIssue}. Live Firebase catalog & streaming remain active.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={isChecking}
+          onClick={handleManualCheck}
+          className="px-2.5 py-1 rounded-lg bg-amber-500/25 hover:bg-amber-500/35 border border-amber-400/40 font-bold text-[10px] text-amber-100 flex items-center gap-1 shrink-0 active:scale-95 transition-transform"
+        >
+          <RefreshCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
+          <span>{isChecking ? "Checking" : "Retry"}</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Dismiss server notice"
+          onClick={() => setServerBannerDismissed(true)}
+          className="p-1 rounded-lg text-amber-200/70 hover:text-white hover:bg-white/10 shrink-0"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
     );
   }
